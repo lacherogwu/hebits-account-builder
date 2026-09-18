@@ -125,6 +125,26 @@ test('cleanup does nothing while there is room', () => {
   assert.deepEqual(pickRemovals([t('a')], { now, freeBytes: 60 * GB, managed: new Set(['a']) }), []);
 });
 
+test('a deletion pass fails closed on a non-numeric free space reading', () => {
+  const torrents = [t('a'), t('b'), t('c'), t('d')];
+  const managed = new Set(['a', 'b', 'c', 'd']);
+  // A normal, low reading releases only enough to reach the target...
+  assert.equal(pickRemovals(torrents, { now, freeBytes: 5 * GB, managed }).length, 3);
+  // ...but undefined/NaN must never be treated as "plenty of room" (which would fall
+  // through every "not enough free space" guard and release everything eligible).
+  assert.deepEqual(pickRemovals(torrents, { now, freeBytes: undefined, managed }), []);
+  assert.deepEqual(pickRemovals(torrents, { now, freeBytes: NaN, managed }), []);
+});
+
+test('a grab pass also fails closed on a non-numeric free space reading', () => {
+  const items = [it('a'), it('b')];
+  // A normal reading grabs as usual...
+  assert.equal(pickGrabs(items, ctx({ freeBytes: 120 * GB })).length, 2);
+  // ...but undefined/NaN must not be treated as "plenty of room".
+  assert.deepEqual(pickGrabs(items, ctx({ freeBytes: undefined })), []);
+  assert.deepEqual(pickGrabs(items, ctx({ freeBytes: NaN })), []);
+});
+
 test('cleanup removes only finished, long-seeded, well-seeded, managed torrents; cheapest first', () => {
   const torrents = [
     t('crowded', { num_complete: 80 }),
@@ -143,4 +163,19 @@ test('cleanup removes only finished, long-seeded, well-seeded, managed torrents;
 test('emergency cleanup may release rare torrents too', () => {
   const out = pickRemovals([t('rare', { num_complete: 2 })], { now, freeBytes: 5 * GB, managed: new Set(['rare']) });
   assert.deepEqual(out.map((x) => x.hash), ['rare']);
+});
+
+test('the minWatchAgeDays guard follows a configured watchCategory, not the hardcoded default', () => {
+  const torrents = [
+    // Labeled with the site's default 'watch' category, but this deployment renamed it,
+    // so with the option threaded through it must NOT get the on-demand protection.
+    t('renamed-default', { category: 'watch', completion_on: now / 1000 - 9 * 86400 }),
+    // Labeled with the configured on-demand category: too young, must be protected.
+    t('on-demand-young', { category: 'on-demand', completion_on: now / 1000 - 9 * 86400 }),
+    // Labeled with the configured on-demand category and old enough: eligible.
+    t('on-demand-old', { category: 'on-demand', completion_on: now / 1000 - 20 * 86400 }),
+  ];
+  const managed = new Set(['renamed-default', 'on-demand-young', 'on-demand-old']);
+  const out = pickRemovals(torrents, { now, freeBytes: 20 * GB, managed, opts: { watchCategory: 'on-demand' } });
+  assert.deepEqual(out.map((x) => x.hash).sort(), ['on-demand-old', 'renamed-default']);
 });
