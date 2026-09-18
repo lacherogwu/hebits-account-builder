@@ -1,0 +1,14 @@
+{
+  "name": "hebits-account-builder",
+  "version": "1.0.0",
+  "description": "Builds a Hebits ratio automatically: grabs freeleech uploads, seeds them, releases them when the disk fills.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  }
+}
