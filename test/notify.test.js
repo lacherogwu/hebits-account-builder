@@ -118,3 +118,38 @@ test('a failing transport does not record the send, so the next attempt retries'
   assert.equal(await n.send('k', 'T', 'M'), false);
   assert.deepEqual(state, {});
 });
+
+test('both transports fire when both are configured', async () => {
+  const sent = [];
+  const calls = [];
+  const n = new Notifier(
+    { webhookUrl: 'http://hook', command: ['/bin/echo', '{{title}}'] },
+    {}, () => {}, () => {},
+    {
+      fetch: async (url, init) => { sent.push({ url, init }); return { ok: true, status: 200 }; },
+      execFile: async (cmd, args) => { calls.push({ cmd, args }); },
+    },
+  );
+  assert.equal(await n.send('k', 'T', 'M'), true);
+  assert.equal(sent.length, 1);
+  assert.equal(calls.length, 1);
+});
+
+test('a failing command does not record the send, so the next attempt retries', async () => {
+  const state = {};
+  const n = new Notifier(
+    { command: ['/bin/echo', '{{title}}'] }, state, () => {}, () => {},
+    { execFile: async () => { throw new Error('boom'); } },
+  );
+  assert.equal(await n.send('k', 'T', 'M'), false);
+  assert.deepEqual(state, {});
+});
+
+test('{{json:...}} survives a backslash in the rendered default body', () => {
+  const hostile = 'back\\slash "quote"\nnewline';
+  const out = renderTemplate(
+    '{"kind":"{{json:kind}}","title":"{{json:title}}","message":"{{json:message}}"}',
+    { kind: 'k', title: 'T', message: hostile },
+  );
+  assert.deepEqual(JSON.parse(out), { kind: 'k', title: 'T', message: hostile });
+});
