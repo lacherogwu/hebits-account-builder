@@ -1,0 +1,5 @@
+{
+  "notify": {
+    "webhookUrl": "http://homeassistant.local:8123/api/webhook/your-webhook-id"
+  }
+}

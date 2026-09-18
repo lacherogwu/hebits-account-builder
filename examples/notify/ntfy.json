@@ -1,0 +1,7 @@
+{
+  "notify": {
+    "webhookUrl": "https://ntfy.sh/your-topic",
+    "headers": { "Title": "Hebits", "content-type": "text/plain" },
+    "body": "{{message}}"
+  }
+}

@@ -1,0 +1,15 @@
+# Settings → Automations → Create → ⋮ Edit in YAML. Use the same random id as
+# notify.webhookUrl in config.json, and your phone's notify action.
+alias: Hebits Account Builder alerts
+description: Alerts from the Hebits account builder
+triggers:
+  - trigger: webhook
+    webhook_id: <random-id>
+    allowed_methods: [POST]
+    local_only: true
+actions:
+  - action: notify.mobile_app_<your_phone>
+    data:
+      title: "{{ trigger.json.title }}"
+      message: "{{ trigger.json.message }}"
+mode: queued

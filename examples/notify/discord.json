@@ -1,0 +1,6 @@
+{
+  "notify": {
+    "webhookUrl": "https://discord.com/api/webhooks/<id>/<token>",
+    "body": "{\"content\":\"**{{json:title}}**\\n{{json:message}}\"}"
+  }
+}

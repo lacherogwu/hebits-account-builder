@@ -1,0 +1,6 @@
+{
+  "notify": {
+    "webhookUrl": "https://api.telegram.org/bot<token>/sendMessage",
+    "body": "{\"chat_id\":\"<chat-id>\",\"text\":\"{{json:title}}\\n{{json:message}}\"}"
+  }
+}

@@ -42,3 +42,79 @@ test('disabled without a URL, and survives an unreachable hook', async () => {
   assert.equal(await bad.send('x', 't', 'm'), false);
   assert.equal(logs.length, 1);
 });
+
+import { renderTemplate } from '../lib/notify.js';
+
+test('renderTemplate substitutes raw by default', () => {
+  assert.equal(renderTemplate('{{title}}: {{message}}', { title: 'A', message: 'B' }), 'A: B');
+});
+
+test('renderTemplate json-escapes so a quote cannot break the body', () => {
+  const out = renderTemplate('{"t":"{{json:title}}"}', { title: 'He said "hi"\nbye' });
+  assert.deepEqual(JSON.parse(out), { t: 'He said "hi"\nbye' });
+});
+
+test('renderTemplate url-encodes', () => {
+  assert.equal(renderTemplate('q={{url:title}}', { title: 'a b&c' }), 'q=a%20b%26c');
+});
+
+test('renderTemplate blanks unknown keys', () => {
+  assert.equal(renderTemplate('[{{nope}}]', {}), '[]');
+});
+
+test('the default body keeps the shape the Home Assistant automation expects', async () => {
+  const sent = [];
+  const n = new Notifier(
+    { webhookUrl: 'http://hook' }, {}, () => {}, () => {},
+    { fetch: async (url, init) => { sent.push({ url, init }); return { ok: true, status: 200 }; } },
+  );
+  await n.send('disk', 'Title', 'Message');
+  assert.equal(sent[0].url, 'http://hook');
+  assert.equal(sent[0].init.method, 'POST');
+  assert.deepEqual(JSON.parse(sent[0].init.body), { kind: 'disk', title: 'Title', message: 'Message' });
+});
+
+test('a custom method, headers and body are honoured', async () => {
+  const sent = [];
+  const n = new Notifier(
+    {
+      webhookUrl: 'http://ntfy/topic',
+      method: 'PUT',
+      headers: { Title: 'x', 'content-type': 'text/plain' },
+      body: '{{message}}',
+    },
+    {}, () => {}, () => {},
+    { fetch: async (url, init) => { sent.push({ url, init }); return { ok: true, status: 200 }; } },
+  );
+  await n.send('k', 'T', 'M');
+  assert.equal(sent[0].init.method, 'PUT');
+  assert.equal(sent[0].init.body, 'M');
+  assert.equal(sent[0].init.headers['content-type'], 'text/plain');
+});
+
+test('a command is run with rendered arguments', async () => {
+  const calls = [];
+  const n = new Notifier(
+    { command: ['/bin/echo', '{{title}}', '{{message}}'] },
+    {}, () => {}, () => {},
+    { execFile: async (cmd, args) => { calls.push({ cmd, args }); } },
+  );
+  assert.equal(await n.send('k', 'T', 'M'), true);
+  assert.deepEqual(calls[0], { cmd: '/bin/echo', args: ['T', 'M'] });
+});
+
+test('a notifier with neither a webhook nor a command is disabled', async () => {
+  const n = new Notifier({}, {}, () => {}, () => {});
+  assert.equal(n.enabled, false);
+  assert.equal(await n.send('k', 'T', 'M'), false);
+});
+
+test('a failing transport does not record the send, so the next attempt retries', async () => {
+  const state = {};
+  const n = new Notifier(
+    { webhookUrl: 'http://hook' }, state, () => {}, () => {},
+    { fetch: async () => ({ ok: false, status: 500 }) },
+  );
+  assert.equal(await n.send('k', 'T', 'M'), false);
+  assert.deepEqual(state, {});
+});
