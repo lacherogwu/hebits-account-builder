@@ -145,6 +145,24 @@ test('a failing command does not record the send, so the next attempt retries', 
   assert.deepEqual(state, {});
 });
 
+test('prune drops throttle entries older than maxAgeMs and saves once', () => {
+  let saves = 0;
+  const state = { 'torrent-old': 1000, 'stuck-recent': 9000, login: 500 };
+  const n = new Notifier({}, state, () => saves++, () => {});
+  n.prune(5000, 10000);
+  assert.deepEqual(state, { 'stuck-recent': 9000 });
+  assert.equal(saves, 1);
+});
+
+test('prune does nothing, and does not save, when nothing is stale', () => {
+  let saves = 0;
+  const state = { fresh: 9000 };
+  const n = new Notifier({}, state, () => saves++, () => {});
+  n.prune(5000, 10000);
+  assert.deepEqual(state, { fresh: 9000 });
+  assert.equal(saves, 0);
+});
+
 test('{{json:...}} survives a backslash in the rendered default body', () => {
   const hostile = 'back\\slash "quote"\nnewline';
   const out = renderTemplate(
