@@ -48,6 +48,7 @@ environment variable. See `config.example.json` for a starting point.
 |---|---|---|
 | `token` | random, generated on first run | Secret path segment every route sits behind |
 | `port` | `7001` | Listen port, all interfaces |
+| `lanHost` | empty (auto-detected) | LAN address used in links such as the cookie-update alert; set it if auto-detection picks the wrong interface |
 | `dailyLimit` | `10` | Fallback only; the real counter is read from the Hebits profile page |
 | `dailyLimitByDay` | `{}` | Per-day overrides, e.g. `{"2026-09-17": 5}` for a new account's first day |
 | `minFreeGB` | `20` | Free disk space to keep after a download |
@@ -98,8 +99,10 @@ unknown route — the token isn't revealed by the response.
 
 Set `notify.webhookUrl` to POST a JSON alert to any webhook (Home Assistant, ntfy, ...), or
 `notify.command` (an argv array) to run a local command instead — both can be set at once.
-Alerts of the same kind are throttled to once per 6 hours. See `examples/notify/` for
-ready-made configs for Home Assistant, ntfy, Discord and Telegram, and
+Alerts of the same kind are throttled to once per 6 hours. The login-failure alert includes
+the `/<token>/cookie` URL so it can be opened straight from the notification; that URL is
+your admin secret, so only send alerts to a channel you control, not a shared one. See
+`examples/notify/` for ready-made configs for Home Assistant, ntfy, Discord and Telegram, and
 `examples/notify/home-assistant-automation.yaml` for the Home Assistant side.
 
 ## Tags
