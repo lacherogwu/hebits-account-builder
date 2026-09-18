@@ -22,6 +22,9 @@ export interface StoreData {
   grabs: { id: string; at: string }[];
   torrents: Record<string, TorrentEntry>;
   farmLog?: { action: string; text: string; at: string }[];
+  // Notifier throttle state: { [kind]: lastSentMs }. Created on first use via `??= {}`
+  // in server.js, so it's absent from a fresh store.
+  notified?: Record<string, number>;
 }
 
 // The slice of Config that limitToday() needs. Config itself is defined where it's loaded.
