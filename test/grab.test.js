@@ -17,7 +17,9 @@ function harness() {
   const added = [];
   const tagged = [];
   const qbit = {
-    async torrent(hash) { return added.find((a) => a.hash === hash) ? { hash, progress: 0 } : undefined; },
+    // Falsy before the add, truthy after: `hash` here is always the real infohash
+    // ensureTorrent computed, not the placeholder `add()` below records.
+    async torrent(hash) { return added.length ? { hash, progress: 0 } : undefined; },
     async ensureCategory() {},
     async add(buf, filename, opts) { added.push({ filename, ...opts, hash: 'HASH' }); },
     async addTags(hash, tags) { tagged.push({ hash, tags }); },
