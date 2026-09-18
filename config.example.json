@@ -1,0 +1,17 @@
+{
+  "port": 7001,
+  "jackettUrl": "http://127.0.0.1:9117",
+  "jackettIndexer": "hebits",
+  "qbitUrl": "http://127.0.0.1:8080",
+  "qbitUsername": "",
+  "qbitPassword": "",
+  "seedCategory": "seed-auto",
+  "seedPath": "/home/you/hebits/seed",
+  "timezone": "Asia/Jerusalem",
+  "dailyLimit": 10,
+  "minFreeGB": 20,
+  "lowDiskAlertGB": 15,
+  "farm": { "enabled": true, "intervalMin": 10 },
+  "cleanup": { "enabled": true, "intervalMin": 30 },
+  "notify": { "webhookUrl": "" }
+}
