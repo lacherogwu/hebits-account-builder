@@ -13,7 +13,7 @@ import { makeJobs } from './lib/jobs.js';
 import { handleCookiePage } from './lib/cookie-page.js';
 
 const cfg = loadConfig();
-const store = new Store(CONFIG_DIR, cfg.timezone);
+const store = new Store(CONFIG_DIR, cfg.timezone, (m) => log(m));
 const jackett = new Jackett(cfg);
 const qbit = new QBit(cfg);
 const site = new HebitsSite(cfg.jackettIndexerConfig);
