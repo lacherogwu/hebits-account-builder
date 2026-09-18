@@ -52,7 +52,7 @@ function noteLogin(ok, err) {
   }
 }
 
-// Alerts about the Mac's services, at most every 6 hours each.
+// Alerts about the host's services, at most every 6 hours each.
 function alertProblem(kind, title, message) {
   notifier.send(kind, title, message);
 }
@@ -109,7 +109,7 @@ async function farmTick() {
   } catch (e) {
     log(`farm: ${e.message}`);
     if (/qBittorrent|ECONNREFUSED|fetch failed/i.test(e.message)) {
-      alertProblem('service', 'Hebits Mac: a service is down', `Auto-grab failed: ${e.message}`);
+      alertProblem('service', 'Hebits builder: a service is down', `Auto-grab failed: ${e.message}`);
     }
   } finally {
     farmBusy = false;
@@ -129,14 +129,14 @@ async function cleanupTick() {
     log(`cleanup: ${all.length} torrents, free ${(freeBytes / GB).toFixed(0)} GB, ${removals.length} to release`);
     for (const t of errored) {
       farmLog('torrent-error', `${t.name} is in state ${t.state}`);
-      alertProblem(`torrent-${t.hash}`, 'Hebits Mac: torrent error', `${t.name} is in state ${t.state}`);
+      alertProblem(`torrent-${t.hash}`, 'Hebits builder: torrent error', `${t.name} is in state ${t.state}`);
     }
     for (const t of stuckDownloads(all, { now: Date.now(), managed })) {
       const pct = (t.progress * 100).toFixed(0);
       log(`stuck: ${t.name} is still at ${pct}% after a day (${t.state})`);
       alertProblem(
         `stuck-${t.hash}`,
-        'Hebits Mac: download stuck',
+        'Hebits builder: download stuck',
         `${t.name} is at ${pct}%. Seeding time only counts after 100%, so leave it running; if it has no seeders, ask for a reseed on Hebits.`,
       );
     }
@@ -151,11 +151,11 @@ async function cleanupTick() {
     }
     const freeAfter = await qbit.freeSpace();
     if (freeAfter < (cfg.lowDiskAlertGB ?? 15) * GB) {
-      alertProblem('disk', 'Hebits Mac: disk almost full', `${(freeAfter / GB).toFixed(1)} GB free and nothing safe left to release.`);
+      alertProblem('disk', 'Hebits builder: disk almost full', `${(freeAfter / GB).toFixed(1)} GB free and nothing safe left to release.`);
     }
   } catch (e) {
     log(`cleanup: ${e.message}`);
-    alertProblem('service', 'Hebits Mac: a service is down', `Cleanup failed: ${e.message}`);
+    alertProblem('service', 'Hebits builder: a service is down', `Cleanup failed: ${e.message}`);
   } finally {
     cleanupBusy = false;
   }
@@ -255,7 +255,7 @@ const server = createServer(async (req, res) => {
     }
     if (route === 'cookie') return await handleCookiePage(req, res);
     if (route === 'notify-test') {
-      const sent = await notifier.send('test', 'Hebits Mac test', 'Notifications from the Hebits addon work.', { force: true });
+      const sent = await notifier.send('test', 'Hebits account builder test', 'Notifications from the Hebits account builder work.', { force: true });
       return json(res, sent ? 200 : 502, { sent, enabled: notifier.enabled });
     }
     if (route === 'status') {
