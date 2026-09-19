@@ -101,6 +101,39 @@ test('login-ok fires on failing -> ok, but not on unknown -> ok', async () => {
   expect(send.mock.calls.map((c) => c[0])).toContain('login-ok');
 });
 
+// ky's shape when the tracker hangs. hebits-client's transport rethrows anything that is not
+// an HTTPError unwrapped, so this arrives at the jobs as a plain Error - no HebitsError, and a
+// message the deleted regex never matched.
+class TimeoutError extends Error {}
+
+test('a tracker timeout - not a HebitsError at all - still raises a service alert', async () => {
+  const send = vi.fn().mockResolvedValue(true);
+  const hebits: Partial<JobsHebits> = {
+    stats: vi.fn().mockRejectedValue(new TimeoutError('Request timed out: GET https://hebits.net/ajax.php?action=index')),
+  };
+  const { farmTick } = makeJobs(deps({ hebits, notifier: { send } }));
+  await farmTick();
+  expect(send.mock.calls.map((c) => c[0])).toEqual(['service']);
+});
+
+test('a dead cookie never announces "login works again" before the failure it is about to hit', async () => {
+  const send = vi.fn().mockResolvedValue(true);
+  const notifier: Partial<JobsNotifier> = { send, reset: vi.fn() };
+  // The cookie is dead throughout. stats() may still answer - it is the one call that can come
+  // from a cache - while dailyDownloads() always reaches the tracker and so always fails.
+  const stats = vi
+    .fn()
+    .mockRejectedValueOnce(new LoginExpiredError('cookie dead'))
+    .mockResolvedValue({ userId: 1, uploaded: 0, downloaded: 0 });
+  const dailyDownloads = vi.fn().mockRejectedValue(new LoginExpiredError('cookie dead'));
+  const { farmTick } = makeJobs(deps({ hebits: { stats, dailyDownloads }, notifier }));
+
+  await farmTick(); // unknown -> failing: the operator is told the login broke
+  send.mockClear();
+  await farmTick(); // stats answers, dailyDownloads does not
+  expect(send.mock.calls.map((c) => c[0])).toEqual(['login']);
+});
+
 test('browse is called without a categories filter', async () => {
   const browse = vi.fn().mockResolvedValue([]);
   const { farmTick } = makeJobs(deps({ hebits: { browse } }));

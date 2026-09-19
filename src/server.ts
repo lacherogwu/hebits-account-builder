@@ -18,7 +18,13 @@ const store = new Store(CONFIG_DIR, cfg.timezone, (m) => log(m));
 // refuses to start without one could never be recovered. hebits-client@0.1.1's constructor
 // does not throw on an empty cookie; calls simply fail (as LoginExpiredError, typically)
 // until a working cookie is pasted through the /cookie page.
-const hebits = new Hebits({ cookie: readCookie() ?? '' });
+//
+// cacheTtlMs: 0 is deliberate, not an option left unset. stats() is otherwise cached for ten
+// minutes, and stale uploaded/downloaded figures feed farm.ts's ratio safety check - so a
+// counted (paid) download could be taken that a fresh read would have skipped. The cost is one
+// extra request at the three call sites that ask; /status already reaches the tracker on every
+// load, because dailyDownloads() bypasses the cache unconditionally.
+const hebits = new Hebits({ cookie: readCookie() ?? '', cacheTtlMs: 0 });
 const qbit = new QBit(cfg);
 const notifier = new Notifier(cfg.notify || {}, (store.data.notified ??= {}), () => store.save(), (m) => log(m));
 const log = (...a: unknown[]): void => console.log(new Date().toISOString(), ...a);

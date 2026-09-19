@@ -1,6 +1,6 @@
 // The two background jobs: grab to build the account, release to keep the disk free.
 import { networkInterfaces } from 'node:os';
-import { ApiError, LoginExpiredError, RateLimitedError } from 'hebits-client';
+import { ApiError, HebitsError, LoginExpiredError, RateLimitedError } from 'hebits-client';
 import type { BrowseOptions, HebitsTorrent } from 'hebits-client';
 import { pickGrabs, pickRemovals, describe, stuckDownloads } from './farm';
 import type { GrabOptions, CleanupOptions } from './farm';
@@ -122,26 +122,33 @@ export function makeJobs({ cfg, store, hebits, qbit, notifier, ensureTorrent, fa
   }
   const cookiePageUrl = () => `http://${cfg.lanHost || lanAddress()}:${cfg.port}/${cfg.token}/cookie`;
 
-  // The old alert regex (`/qBittorrent|ECONNREFUSED|fetch failed/i.test(e.message)`) matched
-  // Jackett's error strings and matches none of hebits-client's typed errors. Left unchanged,
-  // a tracker-side API change would stop all grabbing while the log filled and no alert ever
-  // fired. LoginExpiredError, ApiError and RateLimitedError are siblings (all extend
-  // HebitsError directly, per hebits-client's errors.d.ts) so no ordering between them can
-  // swallow another, but LoginExpiredError is still checked first since it must route to the
-  // login path only and never also raise a service alert.
+  // Total by construction: every path ends in a notification. The old alert regex
+  // (`/qBittorrent|ECONNREFUSED|fetch failed/i.test(e.message)`) only ever existed to filter
+  // Jackett noise out of a shared catch, and it matches none of hebits-client's errors - not
+  // the typed ones, and not ky's TimeoutError ("Request timed out: GET https://..."), which
+  // the transport rethrows unwrapped when the tracker hangs. Under that regex a hung tracker
+  // stopped all grabbing in silence, so it is gone: nothing here may fail quietly.
+  //
+  // LoginExpiredError, ApiError and RateLimitedError are siblings (all extend HebitsError
+  // directly, per hebits-client's errors.d.ts), so no ordering between them can swallow
+  // another; LoginExpiredError is still first because it must route to the login path only and
+  // never also raise a service alert. The HebitsError branch then catches the remaining
+  // subclasses (NotATorrentError, and anything the package adds later).
   function handleTickError(e: unknown): void {
     if (e instanceof LoginExpiredError) {
       noteLogin(false, e.message);
       return;
     }
+    const message = e instanceof Error ? e.message : String(e);
     if (e instanceof ApiError || e instanceof RateLimitedError) {
-      alertProblem('service', 'Hebits builder: the tracker API changed or is unhappy', e.message);
+      alertProblem('service', 'Hebits builder: the tracker API changed or is unhappy', message);
       return;
     }
-    const message = (e as Error).message;
-    if (/qBittorrent|ECONNREFUSED|fetch failed/i.test(message)) {
-      alertProblem('service', 'Hebits builder: a service is down', `Auto-grab failed: ${message}`);
+    if (e instanceof HebitsError) {
+      alertProblem('service', 'Hebits builder: the tracker is unhappy', message);
+      return;
     }
+    alertProblem('service', 'Hebits builder: a service is down', `Auto-grab failed: ${message}`);
   }
 
   let farmBusy = false;
@@ -150,8 +157,12 @@ export function makeJobs({ cfg, store, hebits, qbit, notifier, ensureTorrent, fa
     farmBusy = true;
     try {
       const stats = await hebits.stats();
-      noteLogin(true);
       const daily = await hebits.dailyDownloads(stats.userId);
+      // Only after a call has actually reached the tracker. dailyDownloads() bypasses the
+      // response cache unconditionally, stats() need not, so declaring the login healthy on
+      // stats() alone could announce "login works again" off a cached read moments before
+      // dailyDownloads() throws LoginExpiredError on the very same dead cookie.
+      noteLogin(true);
       // No `categories` here: filtering server-side would change which results come back
       // and so which torrents the policy ever sees. The category filter stays in farm.ts.
       const items = await hebits.browse({ orderBy: 'time', orderWay: 'desc' });
