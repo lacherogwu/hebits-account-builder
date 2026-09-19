@@ -1,5 +1,8 @@
 // Hebits account builder: grabs freeleech uploads, seeds them, and releases them when the disk fills.
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { serve } from '@hono/node-server';
+import { Hono } from 'hono';
+import type { Context } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { timingSafeEqual } from 'node:crypto';
 import { statSync, copyFileSync, truncateSync } from 'node:fs';
 import { Hebits } from 'hebits-client';
@@ -10,6 +13,7 @@ import { QBit } from './qbit';
 import { makeGrabber, UserError } from './grab';
 import { makeJobs } from './jobs';
 import { handleCookiePage } from './cookie-page';
+import type { CookiePageReq, CookiePageRes } from './cookie-page';
 import { VERSION } from './version';
 
 const cfg = loadConfig();
@@ -52,78 +56,131 @@ function tokenOk(given: string | undefined): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-function json(res: ServerResponse, code: number, body: unknown): void {
-  res.writeHead(code, {
-    'Content-Type': 'application/json; charset=utf-8',
+type AppEnv = { Variables: { route: string } };
+
+function json(c: Context<AppEnv>, code: ContentfulStatusCode, body: unknown): Response {
+  return c.json(body, code, {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Private-Network': 'true',
     'Cache-Control': 'no-store',
   });
-  res.end(JSON.stringify(body));
+}
+
+// Private Network Access: lets an https web page fetch from this LAN address.
+function preflight(): Response {
+  return new Response(null, {
+    status: 204,
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': '*',
+      'Access-Control-Allow-Private-Network': 'true',
+    },
+  });
+}
+
+// Adapts a Hono request into the minimal streaming-body shape handleCookiePage expects, so
+// its own body-accumulation and 16KB cutoff (in cookie-page.ts) run unchanged.
+function toCookiePageReq(c: Context<AppEnv>): CookiePageReq {
+  return {
+    method: c.req.method,
+    async *[Symbol.asyncIterator]() {
+      const reader = c.req.raw.body?.getReader();
+      if (!reader) return;
+      const decoder = new TextDecoder();
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          yield decoder.decode(value, { stream: true });
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    },
+  };
+}
+
+// handleCookiePage writes through a writeHead/end pair (its own CookiePageRes shape); this
+// captures that into a real Response instead of a node ServerResponse.
+async function runCookiePage(c: Context<AppEnv>): Promise<Response> {
+  let statusCode = 200;
+  let headers: Record<string, string> = {};
+  let body = '';
+  const res: CookiePageRes = {
+    writeHead(code, h) {
+      statusCode = code;
+      headers = h;
+    },
+    end(b = '') {
+      body = b;
+    },
+  };
+  await handleCookiePage(toCookiePageReq(c), res, {
+    health,
+    farmLog,
+    log,
+    hebits: (cookie: string) => new Hebits({ cookie }),
+    writeCookie,
+    noteLogin,
+  });
+  return new Response(body, { status: statusCode, headers });
 }
 
 const LOG_FILE = cfg.logFile;
 
-const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-  const url = new URL(req.url ?? '/', 'http://x');
-  const [, token, ...rest] = url.pathname.split('/');
-  if (!tokenOk(token)) return json(res, 404, { error: 'not found' });
-  const route = rest.join('/');
-  try {
-    if (!route.startsWith('play/')) log(`${req.method} ${route} origin=${req.headers.origin || '-'} ua=${req.headers['user-agent'] || '-'}`);
-    if (req.method === 'OPTIONS') {
-      // Private Network Access: lets an https web page fetch from this LAN address.
-      res.writeHead(204, {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': '*',
-        'Access-Control-Allow-Private-Network': 'true',
-      });
-      return res.end();
-    }
-    if (route === 'cookie') {
-      return await handleCookiePage(req, res, {
-        health,
-        farmLog,
-        log,
-        hebits: (cookie: string) => new Hebits({ cookie }),
-        writeCookie,
-        noteLogin,
-      });
-    }
-    if (route === 'notify-test') {
-      const sent = await notifier.send('test', 'Hebits account builder test', 'Notifications from the Hebits account builder work.', { force: true });
-      return json(res, sent ? 200 : 502, { sent, enabled: notifier.enabled });
-    }
-    if (route === 'status') {
-      const d = await daily();
-      const st = await hebits.stats().catch(() => undefined);
-      return json(res, 200, {
-        version: VERSION,
-        account: st && {
-          class: st.userClass,
-          uploadedGB: +(st.uploaded / GB).toFixed(2),
-          downloadedGB: +(st.downloaded / GB).toFixed(2),
-          ratio: st.ratio,
-          requiredRatio: st.requiredRatio,
-          towardHebUser: `downloaded ${(st.downloaded / GB).toFixed(1)}/20 GB, ratio ${st.downloaded ? (st.uploaded / st.downloaded).toFixed(2) : '∞'}/1.25`,
-        },
-        downloadsToday: `${d.used}/${d.limit}`,
-        health: { ...health, logFile: LOG_FILE },
-        recentActivity: (store.data.farmLog || []).slice(-20).reverse(),
-        freeGB: Math.round(((await qbit.freeSpace()) || 0) / GB),
-        torrents: Object.entries(store.data.torrents)
-          .filter(([, t]) => t.hash && !t.removedAt)
-          .map(([id, t]) => ({ id, name: t.name, imdb: t.imdb })),
-      });
-    }
-    return json(res, 404, { error: 'not found' });
-  } catch (err) {
-    log(`${req.method} ${route}: ${(err as Error).message}`);
-    if (!res.headersSent) {
-      res.writeHead(err instanceof UserError ? 409 : 500, { 'Content-Type': 'text/plain; charset=utf-8' });
-      res.end((err as Error).message);
-    } else res.destroy();
+const app = new Hono<AppEnv>();
+
+app.use('*', async (c, next) => {
+  const segments = c.req.path.split('/');
+  if (!tokenOk(segments[1])) return c.notFound();
+  const route = segments.slice(2).join('/');
+  c.set('route', route);
+  if (!route.startsWith('play/')) {
+    log(`${c.req.method} ${route} origin=${c.req.header('origin') || '-'} ua=${c.req.header('user-agent') || '-'}`);
   }
+  await next();
+});
+
+app.options('/:token', preflight);
+app.options('/:token/*', preflight);
+
+app.get('/:token/cookie', runCookiePage);
+app.post('/:token/cookie', runCookiePage);
+
+app.get('/:token/notify-test', async (c) => {
+  const sent = await notifier.send('test', 'Hebits account builder test', 'Notifications from the Hebits account builder work.', { force: true });
+  return json(c, sent ? 200 : 502, { sent, enabled: notifier.enabled });
+});
+
+app.get('/:token/status', async (c) => {
+  const d = await daily();
+  const st = await hebits.stats().catch(() => undefined);
+  return json(c, 200, {
+    version: VERSION,
+    account: st && {
+      class: st.userClass,
+      uploadedGB: +(st.uploaded / GB).toFixed(2),
+      downloadedGB: +(st.downloaded / GB).toFixed(2),
+      ratio: st.ratio,
+      requiredRatio: st.requiredRatio,
+      towardHebUser: `downloaded ${(st.downloaded / GB).toFixed(1)}/20 GB, ratio ${st.downloaded ? (st.uploaded / st.downloaded).toFixed(2) : '∞'}/1.25`,
+    },
+    downloadsToday: `${d.used}/${d.limit}`,
+    health: { ...health, logFile: LOG_FILE },
+    recentActivity: (store.data.farmLog || []).slice(-20).reverse(),
+    freeGB: Math.round(((await qbit.freeSpace()) || 0) / GB),
+    torrents: Object.entries(store.data.torrents)
+      .filter(([, t]) => t.hash && !t.removedAt)
+      .map(([id, t]) => ({ id, name: t.name, imdb: t.imdb })),
+  });
+});
+
+app.notFound((c) => json(c, 404, { error: 'not found' }));
+
+app.onError((err, c) => {
+  const route = c.get('route') ?? '';
+  log(`${c.req.method} ${route}: ${(err as Error).message}`);
+  return c.text((err as Error).message, err instanceof UserError ? 409 : 500, { 'Content-Type': 'text/plain; charset=utf-8' });
 });
 
 // launchd keeps the log file open in append mode: copy then truncate.
@@ -144,4 +201,4 @@ setTimeout(farmTick, 60_000);
 setInterval(farmTick, (cfg.farm?.intervalMin ?? 10) * 60_000);
 setTimeout(cleanupTick, 90_000);
 setInterval(cleanupTick, (cfg.cleanup?.intervalMin ?? 30) * 60_000);
-server.listen(cfg.port, '0.0.0.0', () => log(`hebits account builder v${VERSION} listening on :${cfg.port}`));
+serve({ fetch: app.fetch, hostname: '0.0.0.0', port: cfg.port }, () => log(`hebits account builder v${VERSION} listening on :${cfg.port}`));
