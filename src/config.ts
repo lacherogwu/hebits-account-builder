@@ -241,7 +241,7 @@ interface Salvage {
 //    `notify.headers` is a supported place for an operator to put an auth header literally
 //    named "token" (notify.ts reads headers/method/body/command). A non-global match would
 //    take whichever came first in the text, which is how a webhook header's value once
-//    became the sibling addon's URL secret while the code reported the operator's token had
+//    became the service's URL secret while the code reported the operator's token had
 //    been kept - every client URL dead, and the secret copied from a header that may be
 //    shared with another system. So: collect every candidate, and salvage only when exactly
 //    ONE is shape-valid. Zero or several fall through to a fresh token, which is the

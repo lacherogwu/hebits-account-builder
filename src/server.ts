@@ -42,8 +42,8 @@ const store = new Store(CONFIG_DIR, cfg.timezone, (m) => log(m));
 //
 // rateLimit: left at hebits-client's default of one request per 2s, deliberately. Its own
 // comment there says "nothing here is latency-sensitive", which is a claim about a consumer -
-// and this service is that consumer. The sibling Stremio addon had to raise it because a TV
-// waits on a stream list; nothing waits on anything here. A farm tick costs at most seven
+// and this service is that consumer. An interactive consumer - one where a person is waiting
+// on a response - would have to raise it; nothing waits on anything here. A farm tick costs at most seven
 // tracker requests (stats, dailyDownloads, browse, then dailyDownloads + downloadTorrent per
 // grab, capped at maxPerRun = 2), so roughly 14s of a 600s interval, and farmBusy stops ticks
 // overlapping; the cleanup tick talks only to qBittorrent. The most a human ever waits is

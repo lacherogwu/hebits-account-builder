@@ -52,7 +52,7 @@ environment variable. See `config.example.json` for a starting point.
 | `timezone` | `Asia/Jerusalem` | Used for the daily download counter's day boundary |
 | `qbitUrl` | `http://127.0.0.1:8080` | qBittorrent WebUI base URL |
 | `qbitUsername`, `qbitPassword` | empty | Only needed if qBittorrent's "bypass authentication for clients on localhost" is off |
-| `watchCategory`, `watchPath` | `watch`, `~/hebits/watch` | Category/path for torrents grabbed on demand (for a companion streaming addon) |
+| `watchCategory`, `watchPath` | `watch`, `~/hebits/watch` | Category/path for torrents grabbed on demand, as opposed to the ones this service farms |
 | `seedCategory`, `seedPath` | `seed-auto`, `~/hebits/seed` | Category/path for torrents auto-grabbed to build the account |
 | `trackerHost` | `hebits.net` | The tracker host a torrent must announce to before it can be [adopted](#adoption). Only worth changing if the tracker's announce domain moves; a wrong value means nothing is ever adopted, which `/status` reports and an alert names |
 | `farm` | `{"enabled": true, "intervalMin": 10}` | Auto-grab job; see `GRAB_DEFAULTS` in `src/farm.ts` for tuning knobs (`keepForUser`, `reserveGB`, `maxSizeGB`, …) and [Rank targets and presets](#rank-targets-and-presets) for `targetRank`, `preset` and `weights` |
@@ -61,6 +61,15 @@ environment variable. See `config.example.json` for a starting point.
 | `lowDiskAlertGB` | `15` | Alert threshold after a release pass still leaves the disk full |
 | `torrentDir` | `<config dir>/torrents` | Where downloaded `.torrent` files are cached |
 | `logFile` | `<config dir>/builder.log` | The log the service writes. It logs to stdout, so whatever supervises the service must redirect stdout and stderr to this same path — see [Running it as a service](#running-it-as-a-service); it's truncated in place, with a `.1` backup, once it passes 20 MB |
+
+**Why the `token` is random rather than empty.** There is no login here: the token *is* the
+authentication, and the service listens on all interfaces. An empty token would not mean "no
+protection" — it would mean the guard compares two empty strings and passes, leaving every
+route open to anyone who can reach the port, including `/cookie`, where the Hebits session
+cookie is pasted and can be read back. Generating one on first run is safe by default with
+nothing to set up. It is then preserved across restarts, and across a corrupted `config.json`
+wherever it can be identified unambiguously, because rotating it breaks the `/status` and
+`/cookie` URLs you have bookmarked.
 
 The Hebits login cookie itself is not a `config.json` key — it lives in `cookie.txt` next to
 `config.json`, written by `/cookie` once a paste passes verification.
@@ -104,9 +113,9 @@ your admin secret, so only send alerts to a channel you control, not a shared on
 
 Every torrent this service adds to qBittorrent gets tagged with what it knew when it grabbed
 it: `hebits:<id>` and, when known, `imdb:tt<id>`. A `.torrent` file itself carries neither —
-these tags are the only record. A separate tool reading qBittorrent (such as a companion
-Stremio addon sharing the same instance) can use them to recognize torrents this service
-added and match them to an IMDb id, without either service depending on the other.
+these tags are the only record. The scheme is deliberately plain, so any other tool sharing
+the qBittorrent instance can read it: recognize torrents this service added and match them to
+an IMDb id. Nothing here requires such a tool to exist.
 
 ## Adoption
 
@@ -338,3 +347,15 @@ answering happily:
 ```bash
 curl -s "http://127.0.0.1:7001/<token>/status" | grep -o '"version":"[^"]*"'
 ```
+
+## Related
+
+Independent projects, listed only because they may be useful — this service requires none of
+them and does not talk to them:
+
+- [`hebits-client`](https://www.npmjs.com/package/hebits-client) — the Hebits API client this
+  service is built on. Useful on its own.
+- [`hebits-stremio-addon`](https://github.com/lacherogwu/hebits-stremio-addon) — a separate
+  Stremio-protocol addon that streams from the same tracker through your own qBittorrent. If
+  you run both against one qBittorrent, they will recognize each other's torrents through the
+  [tags](#tags) above, but neither needs the other to be installed or running.

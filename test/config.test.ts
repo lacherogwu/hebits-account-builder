@@ -112,9 +112,9 @@ test('multiple bad fields are all collected in configIssues', async () => {
 // alert, because the process dies before anything that could send one exists.
 //
 // Each test asserts the POST-STATE, not merely that a guard fired. The guard is the easy half:
-// the sibling addon shipped one that caught the parse error and then rewrote config.json as
-// nothing but a fresh token, destroying every other setting - and its test passed, because it
-// only checked that a message mentioned "json".
+// a service of this shape has shipped one that caught the parse error and then rewrote
+// config.json as nothing but a fresh token, destroying every other setting - and its test
+// passed, because it only checked that a message mentioned "json".
 
 test('malformed JSON in config.json is moved aside, not silently destroyed', async () => {
   const original =
@@ -360,7 +360,7 @@ test('an uncreatable torrentDir falls back to the default and is recorded in con
 
 // The fallback is only "normally creatable". A plain file sitting where the default directory
 // would go makes the retry fail too - and an unguarded retry merely moves the crash three
-// lines down, which is what the sibling addon shipped.
+// lines down, which is what a service of this shape has shipped before.
 test('a torrentDir whose fallback is also uncreatable still does not throw', async () => {
   const blocker = join(dir, 'blocker');
   writeFileSync(blocker, 'not a directory');
