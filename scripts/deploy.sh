@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 # Deploy the builder: test, build, copy one bundled file, restart, verify.
-#   scripts/deploy.sh                 # uses ssh host "my-ssh-host"
-#   DEPLOY_HOST=other scripts/deploy.sh
+#   DEPLOY_HOST=my-ssh-host scripts/deploy.sh   # set it each time, or...
+#   echo my-ssh-host > .deploy-host             # ...once, in a git-ignored file
 set -euo pipefail
 
-HOST="${DEPLOY_HOST:-my-ssh-host}"
+HOST="${DEPLOY_HOST:-$(cat .deploy-host 2>/dev/null || true)}"
+if [[ -z "$HOST" ]]; then
+  echo "No deploy host. Set DEPLOY_HOST=<ssh-host>, or write it to .deploy-host (git-ignored):" >&2
+  echo "  echo my-ssh-host > .deploy-host" >&2
+  exit 1
+fi
 DEST="Applications/hebits-account-builder"
 cd "$(dirname "$0")/.."
 
