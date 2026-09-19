@@ -7,3 +7,4 @@ config.json
 state.json
 cookie.txt
 .deploy-host
+*.torrent
