@@ -1,10 +1,10 @@
 {
   "port": 7001,
-  "jackettUrl": "http://127.0.0.1:9117",
-  "jackettIndexer": "hebits",
   "qbitUrl": "http://127.0.0.1:8080",
   "qbitUsername": "",
   "qbitPassword": "",
+  "watchCategory": "watch",
+  "watchPath": "/home/you/hebits/watch",
   "seedCategory": "seed-auto",
   "seedPath": "/home/you/hebits/seed",
   "timezone": "Asia/Jerusalem",

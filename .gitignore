@@ -1,7 +1,9 @@
 node_modules/
+.tsdown/
 .DS_Store
 *.log
 CLAUDE.local.md
 config.json
 state.json
-*.torrent
+cookie.txt
+.deploy-host

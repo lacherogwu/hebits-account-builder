@@ -1,9 +1,8 @@
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
+import { expect, test } from 'vitest';
 import { createHash } from 'node:crypto';
-import { readTorrent } from '../lib/bencode.js';
+import { readTorrent } from '../src/bencode';
 
-const enc = (s) => `${Buffer.byteLength(s)}:${s}`;
+const enc = (s: string) => `${Buffer.byteLength(s)}:${s}`;
 
 test('multi-file torrent: infohash, files, offsets, pad files', () => {
   const info =
@@ -20,11 +19,11 @@ test('multi-file torrent: infohash, files, offsets, pad files', () => {
     'e';
   const buf = Buffer.from('d' + enc('announce') + enc('http://t/a') + enc('info') + info + 'e');
   const t = readTorrent(buf);
-  assert.equal(t.infoHash, createHash('sha1').update(info).digest('hex'));
-  assert.equal(t.name, 'Show');
-  assert.equal(t.pieceLength, 64);
-  assert.equal(t.private, true);
-  assert.deepEqual(t.files.map((x) => [x.path, x.length, x.offset]), [
+  expect(t.infoHash).toBe(createHash('sha1').update(info).digest('hex'));
+  expect(t.name).toBe('Show');
+  expect(t.pieceLength).toBe(64);
+  expect(t.private).toBe(true);
+  expect(t.files.map((x) => [x.path, x.length, x.offset])).toEqual([
     ['Show/a.mkv', 100, 0],
     ['Show/sub/b.mkv', 50, 128],
   ]);
@@ -33,10 +32,10 @@ test('multi-file torrent: infohash, files, offsets, pad files', () => {
 test('single-file torrent', () => {
   const info = 'd' + enc('length') + 'i10e' + enc('name') + enc('movie.mkv') + enc('piece length') + 'i4e' + enc('pieces') + enc('y'.repeat(60)) + 'e';
   const t = readTorrent(Buffer.from('d' + enc('info') + info + 'e'));
-  assert.equal(t.private, false);
-  assert.deepEqual(t.files, [{ path: 'movie.mkv', length: 10, offset: 0 }]);
+  expect(t.private).toBe(false);
+  expect(t.files).toEqual([{ path: 'movie.mkv', length: 10, offset: 0 }]);
 });
 
 test('rejects non-torrent input (e.g. an HTML error page)', () => {
-  assert.throws(() => readTorrent(Buffer.from('<html>limit reached</html>')));
+  expect(() => readTorrent(Buffer.from('<html>limit reached</html>'))).toThrow();
 });

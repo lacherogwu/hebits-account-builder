@@ -1,30 +1,43 @@
 // Hebits account builder: grabs freeleech uploads, seeds them, and releases them when the disk fills.
-import { createServer } from 'node:http';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
-import { readFileSync, statSync, copyFileSync, truncateSync } from 'node:fs';
-import { loadConfig, CONFIG_DIR } from './lib/config.js';
-import { Store } from './lib/store.js';
-import { Jackett } from './lib/jackett.js';
-import { Notifier } from './lib/notify.js';
-import { QBit } from './lib/qbit.js';
-import { HebitsSite } from './lib/hebits.js';
-import { makeGrabber, UserError } from './lib/grab.js';
-import { makeJobs } from './lib/jobs.js';
-import { handleCookiePage } from './lib/cookie-page.js';
+import { statSync, copyFileSync, truncateSync } from 'node:fs';
+import { Hebits } from 'hebits-client';
+import { loadConfig, CONFIG_DIR, readCookie, writeCookie } from './config';
+import { Store } from './store';
+import { Notifier } from './notify';
+import { QBit } from './qbit';
+import { makeGrabber, UserError } from './grab';
+import { makeJobs } from './jobs';
+import { handleCookiePage } from './cookie-page';
+import { VERSION } from './version';
 
 const cfg = loadConfig();
 const store = new Store(CONFIG_DIR, cfg.timezone, (m) => log(m));
-const jackett = new Jackett(cfg);
+// Startup is unconditional: this is the only way to install a cookie, so a server that
+// refuses to start without one could never be recovered. The constructor does not throw
+// on an empty cookie; calls simply fail (as LoginExpiredError, typically) until a working
+// cookie is pasted through the /cookie page.
+//
+// cookie is a provider, not a bound string: hebits-client@0.2.0+ calls this function fresh
+// before every request (via a ky beforeRequest hook), so a cookie pasted through the /cookie
+// page takes effect on the very next request, with no restart. A plain string would bind
+// whatever readCookie() returned at process start forever - the bug this fixes.
+//
+// cacheTtlMs: 0 is deliberate, not an option left unset. stats() is otherwise cached for ten
+// minutes, and stale uploaded/downloaded figures feed farm.ts's ratio safety check - so a
+// counted (paid) download could be taken that a fresh read would have skipped. The cost is one
+// extra request at the three call sites that ask; /status already reaches the tracker on every
+// load, because dailyDownloads() bypasses the cache unconditionally.
+const hebits = new Hebits({ cookie: () => readCookie() ?? '', cacheTtlMs: 0 });
 const qbit = new QBit(cfg);
-const site = new HebitsSite(cfg.jackettIndexerConfig);
 const notifier = new Notifier(cfg.notify || {}, (store.data.notified ??= {}), () => store.save(), (m) => log(m));
-const log = (...a) => console.log(new Date().toISOString(), ...a);
+const log = (...a: unknown[]): void => console.log(new Date().toISOString(), ...a);
 const GB = 1024 ** 3;
-const VERSION = JSON.parse(readFileSync(new URL('./package.json', import.meta.url))).version;
 
-const { ensureTorrent, daily } = makeGrabber({ cfg, store, jackett, qbit, site, log });
+const { ensureTorrent, daily } = makeGrabber({ cfg, store, hebits, qbit, log });
 
-function farmLog(action, text) {
+function farmLog(action: string, text: string): void {
   const list = (store.data.farmLog ??= []);
   list.push({ at: new Date().toISOString(), action, text });
   store.data.farmLog = list.slice(-100);
@@ -33,16 +46,16 @@ function farmLog(action, text) {
 }
 
 const { farmTick, cleanupTick, health, noteLogin } = makeJobs({
-  cfg, store, jackett, qbit, site, notifier, ensureTorrent, farmLog, log,
+  cfg, store, hebits, qbit, notifier, ensureTorrent, farmLog, log,
 });
 
-function tokenOk(given) {
+function tokenOk(given: string | undefined): boolean {
   const a = Buffer.from(given || '');
   const b = Buffer.from(cfg.token);
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-function json(res, code, body) {
+function json(res: ServerResponse, code: number, body: unknown): void {
   res.writeHead(code, {
     'Content-Type': 'application/json; charset=utf-8',
     'Access-Control-Allow-Origin': '*',
@@ -54,11 +67,10 @@ function json(res, code, body) {
 
 const LOG_FILE = cfg.logFile;
 
-const server = createServer(async (req, res) => {
-  const url = new URL(req.url, 'http://x');
+const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+  const url = new URL(req.url ?? '/', 'http://x');
   const [, token, ...rest] = url.pathname.split('/');
   if (!tokenOk(token)) return json(res, 404, { error: 'not found' });
-  const baseUrl = `http://${req.headers.host}/${token}`;
   const route = rest.join('/');
   try {
     if (!route.startsWith('play/')) log(`${req.method} ${route} origin=${req.headers.origin || '-'} ua=${req.headers['user-agent'] || '-'}`);
@@ -71,14 +83,23 @@ const server = createServer(async (req, res) => {
       });
       return res.end();
     }
-    if (route === 'cookie') return await handleCookiePage(req, res, { cfg, site, jackett, farmLog, health, noteLogin, log });
+    if (route === 'cookie') {
+      return await handleCookiePage(req, res, {
+        health,
+        farmLog,
+        log,
+        hebits: (cookie: string) => new Hebits({ cookie }),
+        writeCookie,
+        noteLogin,
+      });
+    }
     if (route === 'notify-test') {
       const sent = await notifier.send('test', 'Hebits account builder test', 'Notifications from the Hebits account builder work.', { force: true });
       return json(res, sent ? 200 : 502, { sent, enabled: notifier.enabled });
     }
     if (route === 'status') {
       const d = await daily();
-      const st = d.stats;
+      const st = await hebits.stats().catch(() => undefined);
       return json(res, 200, {
         version: VERSION,
         account: st && {
@@ -100,22 +121,24 @@ const server = createServer(async (req, res) => {
     }
     return json(res, 404, { error: 'not found' });
   } catch (err) {
-    log(`${req.method} ${route}: ${err.message}`);
+    log(`${req.method} ${route}: ${(err as Error).message}`);
     if (!res.headersSent) {
       res.writeHead(err instanceof UserError ? 409 : 500, { 'Content-Type': 'text/plain; charset=utf-8' });
-      res.end(err.message);
+      res.end((err as Error).message);
     } else res.destroy();
   }
 });
 
 // launchd keeps the log file open in append mode: copy then truncate.
-function rotateLog() {
+function rotateLog(): void {
   try {
     if (statSync(LOG_FILE).size < 20 * 1024 * 1024) return;
     copyFileSync(LOG_FILE, `${LOG_FILE}.1`);
     truncateSync(LOG_FILE, 0);
     log('log rotated');
-  } catch {}
+  } catch {
+    // best-effort; a rotation failure must not take the server down
+  }
 }
 
 rotateLog();
