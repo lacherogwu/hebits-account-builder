@@ -4,7 +4,7 @@ import { STATUS_CODES, createServer } from "node:http";
 import { Http2ServerRequest, constants } from "node:http2";
 import { Readable } from "node:stream";
 import { homedir, networkInterfaces } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { setTimeout as setTimeout$1 } from "node:timers/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -10548,7 +10548,6 @@ var Hono = class extends Hono$1 {
 const HOME = homedir();
 const CONFIG_DIR = process.env.HEBITS_BUILDER_DIR || join(HOME, ".config", "hebits-account-builder");
 const CONFIG_FILE = join(CONFIG_DIR, "config.json");
-const COOKIE_FILE = join(CONFIG_DIR, "cookie.txt");
 const DEFAULTS = {
 	port: 7001,
 	lanHost: "",
@@ -10575,6 +10574,7 @@ const DEFAULTS = {
 	notify: { webhookUrl: "" },
 	lowDiskAlertGB: 15,
 	torrentDir: join(CONFIG_DIR, "torrents"),
+	cookiePath: join(CONFIG_DIR, "cookie.txt"),
 	logFile: join(CONFIG_DIR, "builder.log")
 };
 const RANK_NAMES$1 = [
@@ -10651,6 +10651,7 @@ const fieldSchemas = {
 	trackerHost: string(),
 	lowDiskAlertGB: number(),
 	torrentDir: string(),
+	cookiePath: string(),
 	logFile: string()
 };
 function typeOf(v) {
@@ -10796,19 +10797,19 @@ function loadConfig() {
 	}
 	return cfg;
 }
-function readCookie() {
+function readCookie(path) {
 	try {
-		return readFileSync(COOKIE_FILE, "utf8").trim() || void 0;
+		return readFileSync(path, "utf8").trim() || void 0;
 	} catch {
 		return;
 	}
 }
-function writeCookie(cookie) {
-	mkdirSync(CONFIG_DIR, {
+function writeCookie(path, cookie) {
+	mkdirSync(dirname(path), {
 		recursive: true,
 		mode: 448
 	});
-	writeFileSync(COOKIE_FILE, `${cookie.trim()}\n`, { mode: 384 });
+	writeFileSync(path, `${cookie.trim()}\n`, { mode: 384 });
 }
 //#endregion
 //#region src/cookie-page.ts
@@ -12168,7 +12169,7 @@ const GB = 1024 ** 3;
 const cfg = loadConfig();
 const store = new Store(CONFIG_DIR, cfg.timezone, (m) => log(m));
 const hebits = new Hebits({
-	cookie: () => readCookie() ?? "",
+	cookie: () => readCookie(cfg.cookiePath) ?? "",
 	cacheTtlMs: 0
 });
 const qbit = new QBit(cfg);
@@ -12261,7 +12262,7 @@ async function runCookiePage(c) {
 		farmLog,
 		log,
 		hebits: (cookie) => new Hebits({ cookie }),
-		writeCookie,
+		writeCookie: (cookie) => writeCookie(cfg.cookiePath, cookie),
 		noteLogin
 	});
 	return new Response(body, {

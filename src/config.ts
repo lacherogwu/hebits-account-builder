@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import type { CleanupOptions, GrabOptions } from './farm';
 // Type-only: the notifier's own view of its options is the single source of truth for what
@@ -12,7 +12,6 @@ import type { NotifyConfig } from './notify';
 const HOME = homedir();
 export const CONFIG_DIR = process.env.HEBITS_BUILDER_DIR || join(HOME, '.config', 'hebits-account-builder');
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
-const COOKIE_FILE = join(CONFIG_DIR, 'cookie.txt');
 
 export interface Config {
   port: number;
@@ -54,6 +53,9 @@ export interface Config {
   notify: NotifyConfig & { webhookUrl: string };
   lowDiskAlertGB: number;
   torrentDir: string;
+  // The file holding the Hebits session cookie. Configurable like every other path here, so
+  // it can be pointed at a file another service also reads - one paste then serves both.
+  cookiePath: string;
   logFile: string;
   token: string;
   // Fields from config.json that failed validation and fell back to their default, one
@@ -81,6 +83,9 @@ const DEFAULTS: Omit<Config, 'token' | 'configIssues'> = {
   notify: { webhookUrl: '' },
   lowDiskAlertGB: 15,
   torrentDir: join(CONFIG_DIR, 'torrents'),
+  // Defaults inside the config directory, so the service is self-contained unless the
+  // operator deliberately points it somewhere shared.
+  cookiePath: join(CONFIG_DIR, 'cookie.txt'),
   // Also where the supervisor must send stdout/stderr, which is what makes rotateLog() in
   // server.ts rotate the log that actually exists. The supervisor's config holds the
   // machine-specific spelling of this path; this default stays portable.
@@ -193,6 +198,7 @@ const fieldSchemas: Record<string, z.ZodType> = {
   trackerHost: z.string(),
   lowDiskAlertGB: z.number(),
   torrentDir: z.string(),
+  cookiePath: z.string(),
   logFile: z.string(),
 };
 
@@ -496,16 +502,20 @@ export function loadConfig(): Config {
 // Missing or unreadable (absent, a directory, permission-denied, ...): undefined, never a
 // throw. The /cookie page is the only way to install one, so a server that refuses to start
 // without a readable cookie file can never be recovered.
-export function readCookie(): string | undefined {
+export function readCookie(path: string): string | undefined {
   try {
-    const raw = readFileSync(COOKIE_FILE, 'utf8').trim();
+    const raw = readFileSync(path, 'utf8').trim();
     return raw || undefined;
   } catch {
     return undefined;
   }
 }
 
-export function writeCookie(cookie: string): void {
-  mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
-  writeFileSync(COOKIE_FILE, `${cookie.trim()}\n`, { mode: 0o600 });
+// Creates the parent of `path`, not CONFIG_DIR: cookiePath may point outside this service's
+// config directory (that is the point of it being configurable), and a paste that failed
+// with ENOENT because nobody had created a shared directory would be reported as a working
+// cookie by a page that only checks the login.
+export function writeCookie(path: string, cookie: string): void {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  writeFileSync(path, `${cookie.trim()}\n`, { mode: 0o600 });
 }

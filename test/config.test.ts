@@ -32,21 +32,59 @@ test('loadConfig writes config.json with owner-only permissions', async () => {
 
 test('a missing cookie is undefined, not a throw', async () => {
   const { readCookie } = await import('../src/config');
-  expect(readCookie()).toBeUndefined();
+  expect(readCookie(join(dir, 'cookie.txt'))).toBeUndefined();
 });
 
 test('a written cookie round-trips and is owner-only', async () => {
   const { readCookie, writeCookie } = await import('../src/config');
-  writeCookie('  session=abc123  ');
-  expect(readCookie()).toBe('session=abc123');
-  expect(statSync(join(dir, 'cookie.txt')).mode & 0o777).toBe(0o600);
+  const path = join(dir, 'cookie.txt');
+  writeCookie(path, '  session=abc123  ');
+  expect(readCookie(path)).toBe('session=abc123');
+  expect(statSync(path).mode & 0o777).toBe(0o600);
 });
 
 test('the cookie is never written into config.json', async () => {
   const { loadConfig, writeCookie } = await import('../src/config');
-  loadConfig();
-  writeCookie('session=secret');
+  const cfg = loadConfig();
+  writeCookie(cfg.cookiePath, 'session=secret');
   expect(readFileSync(join(dir, 'config.json'), 'utf8')).not.toContain('secret');
+});
+
+// --- cookiePath ---------------------------------------------------------------------------
+// It defaults inside the config directory, and every other path in this service is
+// configurable, so this one is too. The asymmetry mattered: sharing one cookie file between
+// two services was only possible in one direction, which forced the *other* service to point
+// into this one's private config directory and quietly depend on it continuing to exist.
+
+test('cookiePath defaults inside the config directory', async () => {
+  const { loadConfig } = await import('../src/config');
+  expect(loadConfig().cookiePath).toBe(join(dir, 'cookie.txt'));
+});
+
+test('a custom cookiePath is honoured, and its parent directory is created', async () => {
+  // Outside CONFIG_DIR and two levels deep: the old writeCookie created CONFIG_DIR, so a
+  // shared path in a directory nobody had made would have failed with ENOENT.
+  const shared = join(dir, 'shared', 'hebits', 'cookie.txt');
+  writeConfig({ cookiePath: shared });
+  const { loadConfig, readCookie, writeCookie } = await import('../src/config');
+  const cfg = loadConfig();
+  expect(cfg.cookiePath).toBe(shared);
+
+  writeCookie(cfg.cookiePath, 'session=shared');
+
+  expect(existsSync(shared)).toBe(true);
+  expect(readCookie(shared)).toBe('session=shared');
+  expect(statSync(shared).mode & 0o777).toBe(0o600);
+  // The default location stays empty - proving the custom path was used, not merely accepted.
+  expect(existsSync(join(dir, 'cookie.txt'))).toBe(false);
+});
+
+test('a non-string cookiePath falls back to the default and is recorded in configIssues', async () => {
+  writeConfig({ cookiePath: 42 });
+  const { loadConfig } = await import('../src/config');
+  const cfg = loadConfig();
+  expect(cfg.cookiePath).toBe(join(dir, 'cookie.txt'));
+  expect(cfg.configIssues.some((m) => m.includes('cookiePath'))).toBe(true);
 });
 
 test('a valid config.json passes through untouched', async () => {

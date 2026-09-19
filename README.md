@@ -60,6 +60,7 @@ environment variable. See `config.example.json` for a starting point.
 | `notify` | `{"webhookUrl": ""}` | Alert transport; see [Notifications](#notifications) |
 | `lowDiskAlertGB` | `15` | Alert threshold after a release pass still leaves the disk full |
 | `torrentDir` | `<config dir>/torrents` | Where downloaded `.torrent` files are cached |
+| `cookiePath` | `<config dir>/cookie.txt` | File holding the Hebits session cookie; written by the `/cookie` page |
 | `logFile` | `<config dir>/builder.log` | The log the service writes. It logs to stdout, so whatever supervises the service must redirect stdout and stderr to this same path — see [Running it as a service](#running-it-as-a-service); it's truncated in place, with a `.1` backup, once it passes 20 MB |
 
 **Why the `token` is random rather than empty.** There is no login here: the token *is* the
@@ -71,8 +72,14 @@ nothing to set up. It is then preserved across restarts, and across a corrupted 
 wherever it can be identified unambiguously, because rotating it breaks the `/status` and
 `/cookie` URLs you have bookmarked.
 
-The Hebits login cookie itself is not a `config.json` key — it lives in `cookie.txt` next to
-`config.json`, written by `/cookie` once a paste passes verification.
+The cookie **value** is never a `config.json` key — only its location is. It lives in the file
+at `cookiePath`, written by `/cookie` once a paste passes verification, and is re-read on every
+request, so a fresh paste takes effect with no restart.
+
+`cookiePath` defaults inside the config directory, so the service is self-contained. Point it
+at a file another service also reads — anything logging in as the same Hebits account — and one
+paste serves both. The parent directory is created on write, so a shared location outside
+either service's config directory works.
 
 ## Endpoints
 

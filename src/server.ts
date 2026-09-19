@@ -49,7 +49,7 @@ const store = new Store(CONFIG_DIR, cfg.timezone, (m) => log(m));
 // overlapping; the cleanup tick talks only to qBittorrent. The most a human ever waits is
 // /status, at two requests. Raising this would buy nothing and spend it on the one thing that
 // cannot be replaced - the account, on a private tracker.
-const hebits = new Hebits({ cookie: () => readCookie() ?? '', cacheTtlMs: 0 });
+const hebits = new Hebits({ cookie: () => readCookie(cfg.cookiePath) ?? '', cacheTtlMs: 0 });
 const qbit = new QBit(cfg);
 store.data.notified ??= {};
 const notifier = new Notifier(
@@ -151,7 +151,9 @@ async function runCookiePage(c: Context<AppEnv>): Promise<Response> {
     farmLog,
     log,
     hebits: (cookie: string) => new Hebits({ cookie }),
-    writeCookie,
+    // The page is handed a one-argument writer on purpose: where the cookie lives is
+    // configuration, and nothing the page needs to know.
+    writeCookie: (cookie: string) => writeCookie(cfg.cookiePath, cookie),
     noteLogin,
   });
   return new Response(body, { status: statusCode, headers });
