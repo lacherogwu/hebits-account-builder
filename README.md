@@ -224,7 +224,10 @@ than one score:
 
 - **`ratio`** is upload pull per unit of ratio damage — demand divided by what the torrent
   will cost you. Freeleech keeps its full demand at zero cost. This is the dimension to weight
-  if what you want is **more upload**.
+  if what you want is **more upload**. In practice on this tracker it behaves as a *scarcity*
+  bet more than a demand one: across a recorded browse page, leecher counts ran 0–3 while
+  seeders ran 5–133, so what separates candidates is mostly how few seeders they have — which
+  is also what decides your share of whatever demand does arrive.
 - **`volume`** wants big *counted* torrents; freeleech bytes do not move the GB requirement at
   all, so they score zero here.
 - **`count`** wants small torrents, because the ladder counts *torrents completed* and a 1 GB
