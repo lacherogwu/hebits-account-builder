@@ -656,8 +656,10 @@ test('the trap that rule avoids: meeting the volume while falling under the targ
 
 test('an account already past its target ratio still chases volume', () => {
   // Heb Rookie heading for Heb User (20 GB, ratio 1.25): ratio 1.51, so the ratio dimension
-  // is not the constraint and volume is. This is the live account - the rule change must be a
-  // no-op for it, and this pins that rather than assuming it.
+  // is not the constraint and volume is. These were the live account's numbers when this rule
+  // changed, kept as the fixture for the ratio-is-met side of it. (Hours later that same
+  // account took a counted grab, fell to ratio 1.03, and started reporting ratio-first - the
+  // change working, not a contradiction: it is a different point on the same curve.)
   const p = rankProgress({ uploaded: 15.69 * GB, downloaded: 10.38 * GB, currentRank: 'Heb Rookie', targetRank: 'Heb User' });
   expect(p.ratio.met).toBe(true);
   expect(p.binding).toBe('volume');
