@@ -294,6 +294,11 @@ export interface RankProgress {
   targetRankRequested?: string;
   ratio: DimensionProgress;
   volumeGB: DimensionProgress;
+  /** Upload measured against what the TARGET needs, not against today's download: to hold
+   *  `ratio` once `volumeGB` is reached you need `ratio x volumeGB` uploaded. See the
+   *  binding-dimension comment in rankProgress() for why this, and not the current ratio,
+   *  is what decides whether ratio is the constraint. */
+  uploadGB: DimensionProgress;
   torrents: DimensionProgress;
   /** Cannot be farmed and is never `known` today: nothing exposes the account's join date. */
   days: DimensionProgress;
@@ -341,8 +346,14 @@ export function rankProgress(input: ProgressInput): RankProgress {
   // thing that can block a grab is requiredRatioFor()/demotionRatioFor().
   const needRatio = Number.isFinite(input.targetRatio) && (input.targetRatio ?? 0) > 0 ? (input.targetRatio as number) : target.ratio;
 
+  const uploadedGB = uploaded / GB;
+  // The upload the target rank actually asks for. Its ratio requirement is not a standalone
+  // number: it has to hold AT the target's volume, so the real bar is ratio x volume.
+  const needUploadGB = needRatio * target.volumeGB;
+
   const dims = {
     ratio: { have: ratio, need: needRatio, met: ratio >= needRatio, known: true },
+    uploadGB: { have: uploadedGB, need: needUploadGB, met: uploadedGB >= needUploadGB, known: true },
     volumeGB: { have: downloadedGB, need: target.volumeGB, met: downloadedGB >= target.volumeGB, known: true },
     torrents: {
       have: completed?.count ?? 0,
@@ -364,8 +375,25 @@ export function rankProgress(input: ProgressInput): RankProgress {
   // when it is known: steering on a number nobody could determine is how every decision ends
   // up quietly mis-aimed. A requirement of 0 (Heb User has no torrent count) scores Infinity
   // through fraction() and so can never be the binding one.
+  // The ratio dimension is scored on UPLOAD against ratio x volume, not on the current ratio
+  // against the target ratio. Those two are not the same question, because volume and ratio
+  // are coupled: a counted download raises volume and lowers ratio in the same move. Scored
+  // independently, an account whose ratio sits just under its target and whose volume is far
+  // behind is told to chase volume - and arrives at the volume requirement with a ratio well
+  // under the one the rank needs, further from the rank than when it started. Measuring the
+  // upload it will need once it is AT the target volume prices that in: the bar rises with
+  // the volume, so "ratio" stops being the constraint only when there is genuinely enough
+  // upload to spend.
+  //
+  // Worth knowing what this reduces to. uploaded/(R*V) < downloaded/V is just
+  // uploaded/R < downloaded, i.e. ratio < R - so between these two, ratio is the constraint
+  // exactly while the account is under its target ratio, and volume takes over the moment it
+  // is past it. The R*V form is kept rather than the shorter test because it is the honest
+  // statement of the requirement, it puts the ratio dimension on the same 0..1 scale as the
+  // other two (so the torrent count still competes fairly), and it gives `uploadGB` a real
+  // number to report.
   const candidates: { name: 'ratio' | 'volume' | 'torrents'; at: number }[] = [
-    { name: 'ratio', at: fraction(ratio, needRatio) },
+    { name: 'ratio', at: fraction(uploadedGB, needUploadGB) },
     { name: 'volume', at: fraction(downloadedGB, target.volumeGB) },
   ];
   if (dims.torrents.known && target.torrents > 0) candidates.push({ name: 'torrents', at: fraction(dims.torrents.have, target.torrents) });
@@ -390,6 +418,10 @@ export function rankProgress(input: ProgressInput): RankProgress {
     `ratio ${fmtRatio(ratio)}/${needRatio}${dims.ratio.met ? ' ✓' : ''}`,
     `volume ${downloadedGB.toFixed(1)}/${target.volumeGB} GB${dims.volumeGB.met ? ' ✓' : ''}`,
   ];
+  // Only worth a clause when the target asks for volume at all; at the bottom of the ladder
+  // it would read "upload 15.7/0 GB".
+  if (needUploadGB > 0)
+    parts.push(`upload ${uploadedGB.toFixed(1)}/${needUploadGB.toFixed(0)} GB${dims.uploadGB.met ? ' ✓' : ''}`);
   if (target.torrents > 0) {
     // "≥" is not decoration: it is the difference between reporting a bound and asserting a
     // number this service cannot stand behind.
@@ -408,6 +440,7 @@ export function rankProgress(input: ProgressInput): RankProgress {
     targetRank: target.name,
     ratio: dims.ratio,
     volumeGB: dims.volumeGB,
+    uploadGB: dims.uploadGB,
     torrents: dims.torrents,
     days: dims.days,
     binding,

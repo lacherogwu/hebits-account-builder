@@ -240,6 +240,16 @@ than one score:
 Note `count` and `points` are close to opposites (small versus big), and `ratio` wants *many*
 leechers while `points` wants *few* seeders. A preset is a decision about those trades.
 
+**Volume and ratio are coupled, and the recommendation accounts for it.** A counted download
+raises volume and lowers ratio in the same move, so the ratio dimension is scored on *upload
+against `ratio × volume`* — the upload you will need once you are **at** the target volume —
+rather than on today's ratio against the target ratio. Scored independently, an account whose
+ratio sits just under its target and whose volume is far behind is told to chase volume, and
+arrives at the volume requirement with a ratio below the one the rank asks for: further from
+the rank than when it started. (That comparison reduces to "is the ratio under the target",
+but the `ratio × volume` form is what `/status` reports as `upload x/y GB`, and it keeps the
+three dimensions on one scale so the torrent count competes fairly.)
+
 With nothing configured the policy farms the **recommended** preset: whichever dimension is
 furthest from the target rank's requirement, except that at or below the ratio floor `ratio`
 wins outright regardless, and that when **nothing** is behind the answer is `points-first` —

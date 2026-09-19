@@ -11152,11 +11152,19 @@ function rankProgress(input) {
 	const ratio = ratioOf(uploaded, downloaded);
 	const downloadedGB = downloaded / GB$3;
 	const needRatio = Number.isFinite(input.targetRatio) && (input.targetRatio ?? 0) > 0 ? input.targetRatio : target.ratio;
+	const uploadedGB = uploaded / GB$3;
+	const needUploadGB = needRatio * target.volumeGB;
 	const dims = {
 		ratio: {
 			have: ratio,
 			need: needRatio,
 			met: ratio >= needRatio,
+			known: true
+		},
+		uploadGB: {
+			have: uploadedGB,
+			need: needUploadGB,
+			met: uploadedGB >= needUploadGB,
 			known: true
 		},
 		volumeGB: {
@@ -11180,7 +11188,7 @@ function rankProgress(input) {
 	};
 	const candidates = [{
 		name: "ratio",
-		at: fraction(ratio, needRatio)
+		at: fraction(uploadedGB, needUploadGB)
 	}, {
 		name: "volume",
 		at: fraction(downloadedGB, target.volumeGB)
@@ -11199,6 +11207,7 @@ function rankProgress(input) {
 	else if (binding === "torrents") preset = "count-first";
 	else preset = "points-first";
 	const parts = [`ratio ${fmtRatio(ratio)}/${needRatio}${dims.ratio.met ? " ✓" : ""}`, `volume ${downloadedGB.toFixed(1)}/${target.volumeGB} GB${dims.volumeGB.met ? " ✓" : ""}`];
+	if (needUploadGB > 0) parts.push(`upload ${uploadedGB.toFixed(1)}/${needUploadGB.toFixed(0)} GB${dims.uploadGB.met ? " ✓" : ""}`);
 	if (target.torrents > 0) parts.push(dims.torrents.known ? `torrents ≥${dims.torrents.have}/${target.torrents}${dims.torrents.met ? " ✓" : ""}` : `torrents unknown/${target.torrents}`);
 	if (binding === null && target.days > 0) parts.push(`${target.days} days on site still required (not tracked here)`);
 	const progress = {
@@ -11206,6 +11215,7 @@ function rankProgress(input) {
 		targetRank: target.name,
 		ratio: dims.ratio,
 		volumeGB: dims.volumeGB,
+		uploadGB: dims.uploadGB,
 		torrents: dims.torrents,
 		days: dims.days,
 		binding,

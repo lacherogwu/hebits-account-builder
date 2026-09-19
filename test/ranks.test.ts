@@ -232,26 +232,32 @@ test('below the required ratio, ratio wins whatever the target rank and whatever
 });
 
 test('the demotion line of the rank held is a floor of its own', () => {
-  // Ratio 1.5, downloaded 20 GB: comfortably above requiredRatioFor(20 GB) = 0.8, and volume
-  // toward Heb Fanatic is barely started, so nothing but the demotion line can force ratio.
-  const account = { uploaded: 30 * GB, downloaded: 20 * GB, targetRank: 'Heb Fanatic' };
+  // Ratio 1.70 against a Heb Lover target of 1.5, so the account is ALREADY past the target
+  // ratio and the binding rule below would pick volume. Only the demotion line of the rank
+  // actually held can override that - which is the whole point of this test, and why the
+  // target has to be a rank whose ratio is under the held rank's demotion line.
+  const account = { uploaded: 34 * GB, downloaded: 20 * GB, targetRank: 'Heb Lover' };
   // Heb Veteran is revoked below 1.95 - this account is one bad grab from losing its rank.
   expect(recommendPreset({ ...account, currentRank: 'Heb Veteran' })).toBe('ratio-first');
-  // The identical account one rung lower has nothing to lose, and chases volume instead.
+  // The identical account one rung lower has nothing to lose: requiredRatioFor(20 GB) is 0.8
+  // and Heb Rookie has no demotion line, so it chases volume instead.
   expect(recommendPreset({ ...account, currentRank: 'Heb Rookie' })).toBe('volume-first');
 });
 
 test('the recommendation follows whichever dimension is furthest behind', () => {
-  const common = { uploaded: 200 * GB, downloaded: 100 * GB, targetRank: 'Heb Veteran' }; // ratio 2.0, need 2.05
-  // volume 100/250 = 0.40, torrents 90/100 = 0.90, ratio 2.0/2.05 = 0.98 -> volume.
+  // Ratio 2.5 against Heb Veteran's 2.05: already past the target, so the ratio dimension is
+  // not the constraint and volume and the torrent count are free to compete.
+  const common = { uploaded: 250 * GB, downloaded: 100 * GB, targetRank: 'Heb Veteran' };
+  // volume 100/250 = 0.40, torrents 90/100 = 0.90, upload 250/512.5 = 0.49 -> volume.
   expect(recommendPreset({ ...common, completed: { count: 90, exact: false, basis: 'test' } })).toBe('volume-first');
   // Same account, same ratio, far fewer torrents: 5/100 = 0.05 -> the count becomes binding.
   expect(recommendPreset({ ...common, completed: { count: 5, exact: false, basis: 'test' } })).toBe('count-first');
-  // Same volume and count as the first case, but the ratio target moved out of reach:
-  // 2.0/2.5 = 0.80 is still above volume's 0.40 for Heb Fanatic... so raise the volume too.
+  // Same volume and count as the first case, but the ratio target moved out of reach: the
+  // upload needed becomes 10 x 250 = 2500 GB, so upload sits at 250/2500 = 0.10, below
+  // volume's 0.40, and ratio becomes the constraint.
   expect(
     recommendPreset({
-      uploaded: 200 * GB,
+      uploaded: 250 * GB,
       downloaded: 100 * GB,
       targetRank: 'Heb Veteran',
       targetRatio: 10,
@@ -614,4 +620,46 @@ test('a high rank keeps grabbing after the old ceiling would have stopped it', (
 test('an explicit maxPerHour still overrides the pacing', () => {
   const rich = { uploaded: 500 * GB, downloaded: 0, dailyUsed: 0, dailyLimit: 100, userClass: 'Heb Prophet' };
   expect(pickGrabs(conflicted, ctx({ stats: rich, grabbedLastHour: 1, opts: { maxPerRun: 1, maxPerHour: 1 } }))).toEqual([]);
+});
+
+// --- volume and ratio are coupled ------------------------------------------------------------
+// A counted download raises volume and lowers ratio in the same move, so scoring the two
+// independently can recommend a preset that walks the account AWAY from the rank. Both
+// fixtures below are real accounts.
+
+test("an account just under its target ratio builds upload before chasing volume", () => {
+  // Heb Fanatic heading for Heb Elite (1024 GB, ratio 3): ratio 2.93, volume 61.5% done.
+  // Scored independently, volume (0.615) looks further behind than ratio (0.975) and the
+  // answer was volume-first - which is the trap, see the control below.
+  const sawyer = { uploaded: 1843.2 * GB, downloaded: 630.07 * GB, currentRank: 'Heb Fanatic', targetRank: 'Heb Elite' };
+  const p = rankProgress(sawyer);
+  expect(p.binding).toBe('ratio');
+  expect(p.preset).toBe('ratio-first');
+  // Why: it needs 3 x 1024 = 3072 GB uploaded to stand at the target volume on target ratio,
+  // and it has 1843.
+  expect(p.uploadGB.need).toBeCloseTo(3072, 0);
+  expect(p.uploadGB.met).toBe(false);
+  expect(p.summary).toContain('upload 1843.2/3072 GB');
+});
+
+test('the trap that rule avoids: meeting the volume while falling under the target ratio', () => {
+  const up = 1843.2 * GB;
+  // The same account after taking the 394 GB of counted download that volume-first wanted.
+  const after = rankProgress({ uploaded: up, downloaded: 1024 * GB, currentRank: 'Heb Fanatic', targetRank: 'Heb Elite' });
+  expect(after.volumeGB.met).toBe(true); // volume requirement reached...
+  expect(after.ratio.met).toBe(false); // ...and the ratio requirement lost
+  expect(after.ratio.have).toBeCloseTo(1.8, 1);
+  // Further from the rank than it started, which is what makes this a bug and not a preference.
+  const before = rankProgress({ uploaded: up, downloaded: 630.07 * GB, currentRank: 'Heb Fanatic', targetRank: 'Heb Elite' });
+  expect(after.ratio.have).toBeLessThan(before.ratio.have);
+});
+
+test('an account already past its target ratio still chases volume', () => {
+  // Heb Rookie heading for Heb User (20 GB, ratio 1.25): ratio 1.51, so the ratio dimension
+  // is not the constraint and volume is. This is the live account - the rule change must be a
+  // no-op for it, and this pins that rather than assuming it.
+  const p = rankProgress({ uploaded: 15.69 * GB, downloaded: 10.38 * GB, currentRank: 'Heb Rookie', targetRank: 'Heb User' });
+  expect(p.ratio.met).toBe(true);
+  expect(p.binding).toBe('volume');
+  expect(p.preset).toBe('volume-first');
 });
