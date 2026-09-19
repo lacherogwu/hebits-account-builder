@@ -137,7 +137,7 @@ const RANK_NAMES = [
   'Heb Supreme',
   'Heb Prophet',
 ] as const;
-const PRESET_NAMES = ['ratio-first', 'balanced', 'volume-first', 'count-first'] as const;
+const PRESET_NAMES = ['ratio-first', 'balanced', 'volume-first', 'count-first', 'points-first'] as const;
 
 const grabOptionsShape: Record<string, z.ZodType> = {
   enabled: z.boolean(),
@@ -160,7 +160,7 @@ const grabOptionsShape: Record<string, z.ZodType> = {
   // Per-dimension overrides, merged over the preset's weights. Unknown keys are stripped;
   // a non-numeric weight drops the whole object back to the preset it meant to modify,
   // which is the same fail-open rule every other field here follows.
-  weights: z.object({ ratio: z.number().optional(), volume: z.number().optional(), count: z.number().optional() }),
+  weights: z.object({ ratio: z.number().optional(), volume: z.number().optional(), count: z.number().optional(), points: z.number().optional() }),
 };
 
 const cleanupOptionsShape: Record<string, z.ZodType> = {

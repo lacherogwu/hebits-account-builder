@@ -10595,7 +10595,8 @@ const PRESET_NAMES$1 = [
 	"ratio-first",
 	"balanced",
 	"volume-first",
-	"count-first"
+	"count-first",
+	"points-first"
 ];
 const grabOptionsShape = {
 	enabled: boolean(),
@@ -10617,7 +10618,8 @@ const grabOptionsShape = {
 	weights: object({
 		ratio: number().optional(),
 		volume: number().optional(),
-		count: number().optional()
+		count: number().optional(),
+		points: number().optional()
 	})
 };
 const cleanupOptionsShape = {
@@ -11101,22 +11103,32 @@ const PRESETS = {
 	"ratio-first": {
 		ratio: 1,
 		volume: 0,
-		count: 0
+		count: 0,
+		points: 0
 	},
 	balanced: {
-		ratio: .5,
-		volume: .25,
-		count: .25
+		ratio: .4,
+		volume: .2,
+		count: .2,
+		points: .2
 	},
 	"volume-first": {
 		ratio: .25,
 		volume: .75,
-		count: 0
+		count: 0,
+		points: 0
 	},
 	"count-first": {
 		ratio: .25,
 		volume: 0,
-		count: .75
+		count: .75,
+		points: 0
+	},
+	"points-first": {
+		ratio: .25,
+		volume: 0,
+		count: 0,
+		points: .75
 	}
 };
 Object.keys(PRESETS);
@@ -11182,7 +11194,7 @@ function rankProgress(input) {
 	else if (binding === "ratio") preset = "ratio-first";
 	else if (binding === "volume") preset = "volume-first";
 	else if (binding === "torrents") preset = "count-first";
-	else preset = "balanced";
+	else preset = "points-first";
 	const parts = [`ratio ${fmtRatio(ratio)}/${needRatio}${dims.ratio.met ? " ✓" : ""}`, `volume ${downloadedGB.toFixed(1)}/${target.volumeGB} GB${dims.volumeGB.met ? " ✓" : ""}`];
 	if (target.torrents > 0) parts.push(dims.torrents.known ? `torrents ≥${dims.torrents.have}/${target.torrents}${dims.torrents.met ? " ✓" : ""}` : `torrents unknown/${target.torrents}`);
 	if (binding === null && target.days > 0) parts.push(`${target.days} days on site still required (not tracked here)`);
@@ -11225,7 +11237,7 @@ const GRAB_DEFAULTS = {
 	/** Per-dimension overrides, merged over the preset's weights. */
 	weights: void 0
 };
-const weightsTotal = (w) => w.ratio + w.volume + w.count;
+const weightsTotal = (w) => w.ratio + w.volume + w.count + w.points;
 function resolveWeights(opts, progress) {
 	const pinned = opts?.preset;
 	const base = isPresetName(pinned) ? pinned : progress.preset;
@@ -11235,6 +11247,7 @@ function resolveWeights(opts, progress) {
 		if (Number.isFinite(over.ratio)) weights.ratio = over.ratio;
 		if (Number.isFinite(over.volume)) weights.volume = over.volume;
 		if (Number.isFinite(over.count)) weights.count = over.count;
+		if (Number.isFinite(over.points)) weights.points = over.points;
 		if (!(weightsTotal(weights) > 0)) return {
 			preset: base,
 			weights: { ...PRESETS[base] }
@@ -11255,7 +11268,8 @@ function rawDimensions(it) {
 	return {
 		ratio: demand(it) / (1 + countedGB),
 		volume: countedGB,
-		count: 1 / (1 + sizeGB)
+		count: 1 / (1 + sizeGB),
+		points: pointsPerHour(it.size, it.seeders ?? 0) / (1 + countedGB)
 	};
 }
 function normalise(values) {
@@ -11275,9 +11289,10 @@ function scoreCandidates(items, weights) {
 	const ratio = normalise(raw.map((r) => r.ratio));
 	const volume = normalise(raw.map((r) => r.volume));
 	const count = normalise(raw.map((r) => r.count));
+	const points = normalise(raw.map((r) => r.points));
 	const scores = /* @__PURE__ */ new Map();
 	items.forEach((it, i) => {
-		scores.set(it, weights.ratio * (ratio[i] ?? 0) + weights.volume * (volume[i] ?? 0) + weights.count * (count[i] ?? 0));
+		scores.set(it, weights.ratio * (ratio[i] ?? 0) + weights.volume * (volume[i] ?? 0) + weights.count * (count[i] ?? 0) + weights.points * (points[i] ?? 0));
 	});
 	return scores;
 }

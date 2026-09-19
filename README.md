@@ -55,7 +55,7 @@ environment variable. See `config.example.json` for a starting point.
 | `watchCategory`, `watchPath` | `watch`, `~/hebits/watch` | Category/path for torrents grabbed on demand, as opposed to the ones this service farms |
 | `seedCategory`, `seedPath` | `seed-auto`, `~/hebits/seed` | Category/path for torrents auto-grabbed to build the account |
 | `trackerHost` | `hebits.net` | The tracker host a torrent must announce to before it can be [adopted](#adoption). Only worth changing if the tracker's announce domain moves; a wrong value means nothing is ever adopted, which `/status` reports and an alert names |
-| `farm` | `{"enabled": true, "intervalMin": 10}` | Auto-grab job; see `GRAB_DEFAULTS` in `src/farm.ts` for tuning knobs (`keepForUser`, `reserveGB`, `maxSizeGB`, …) and [Rank targets and presets](#rank-targets-and-presets) for `targetRank`, `preset` and `weights` |
+| `farm` | `{"enabled": true, "intervalMin": 10}` | Auto-grab job; see `GRAB_DEFAULTS` in `src/farm.ts` for tuning knobs (`keepForUser`, `reserveGB`, `maxSizeGB`, …) and [Rank targets and presets](#rank-targets-and-presets) for `targetRank`, `preset` and `weights`. Set `"enabled": false` to run as a [maintenance service](#using-it-only-for-maintenance-not-for-grabbing) with no grabbing |
 | `cleanup` | `{"enabled": true, "intervalMin": 30}` | Auto-release job; see `CLEANUP_DEFAULTS` in `src/farm.ts` (`reserveGB`, `minSeedDays`, `keepIfSeedersBelow`, …) |
 | `notify` | `{"webhookUrl": ""}` | Alert transport; see [Notifications](#notifications) |
 | `rateLimit` | `{"limit": 1, "interval": 2000}` | At most `limit` requests per `interval` ms, shared across every tracker call — `browse`, the profile counter, `.torrent` downloads and every retry. The default is one per two seconds, which is right here: nothing in this service has a person waiting on it. Past 5/s a note is recorded in `configIssues`, but the value is honoured |
@@ -208,26 +208,41 @@ torrents are preferred and it is what `/status` reports progress against, but it
 a grab — an earlier version conflated the two and throttled the account to defend a threshold
 the tracker never required.
 
-**Presets** weight the three farmable dimensions against each other. They decide *which*
-candidates win the day's scarce slots; every filter and every safety check runs identically
-under all of them.
+**Presets** weight four dimensions against each other. They decide *which* candidates win the
+day's scarce slots; every filter and every safety check runs identically under all of them.
 
-| Preset | ratio | volume | count | For |
-|---|---|---|---|---|
-| `ratio-first` | 1 | 0 | 0 | Ratio is at or near the floor. Nothing else matters from a demoted account |
-| `balanced` | 0.5 | 0.25 | 0.25 | Nothing is binding; keep earning on every dimension |
-| `volume-first` | 0.25 | 0.75 | 0 | GB downloaded is what is missing |
-| `count-first` | 0.25 | 0 | 0.75 | The torrent count is what is missing |
+| Preset | ratio | volume | count | points | For |
+|---|---|---|---|---|---|
+| `ratio-first` | 1 | 0 | 0 | 0 | Ratio is at or near the floor. Nothing else matters from a demoted account |
+| `balanced` | 0.4 | 0.2 | 0.2 | 0.2 | Nothing is binding; keep earning on every dimension |
+| `volume-first` | 0.25 | 0.75 | 0 | 0 | GB downloaded is what is missing |
+| `count-first` | 0.25 | 0 | 0.75 | 0 | The torrent count is what is missing |
+| `points-first` | 0.25 | 0 | 0 | 0.75 | Every rank requirement is met. Earn the other currency instead |
 
-`volume` and `count` pull in opposite directions on purpose: the volume requirement counts GB,
-so it wants big *counted* torrents (freeleech bytes do not count toward it at all), while the
-torrent requirement counts torrents, so a 1 GB episode is worth exactly as much as a 40 GB
-remux. `ratio` constrains both.
+The four pull against each other on purpose, which is why they are separate dimensions rather
+than one score:
+
+- **`ratio`** is upload pull per unit of ratio damage — demand divided by what the torrent
+  will cost you. Freeleech keeps its full demand at zero cost. This is the dimension to weight
+  if what you want is **more upload**.
+- **`volume`** wants big *counted* torrents; freeleech bytes do not move the GB requirement at
+  all, so they score zero here.
+- **`count`** wants small torrents, because the ladder counts *torrents completed* and a 1 GB
+  episode is worth exactly as much as a 40 GB remux.
+- **`points`** wants big, *rarely seeded* torrents, because that is what the bonus-points
+  formula pays for — scored per unit of ratio damage, like `ratio`, so the two are comparable.
+  Points are not a rank requirement; they are the currency that buys upload credit, freeleech
+  tokens and HnR removals from Heb User upwards.
+
+Note `count` and `points` are close to opposites (small versus big), and `ratio` wants *many*
+leechers while `points` wants *few* seeders. A preset is a decision about those trades.
 
 With nothing configured the policy farms the **recommended** preset: whichever dimension is
 furthest from the target rank's requirement, except that at or below the ratio floor `ratio`
-wins outright regardless. Set `farm.preset` to pin one, or `farm.weights`
-(`{"ratio": …, "volume": …, "count": …}`) to override individual weights.
+wins outright regardless, and that when **nothing** is behind the answer is `points-first` —
+there is nothing left to farm *for*, so it earns the other currency. Set `farm.preset` to pin
+one, or `farm.weights` (`{"ratio": …, "volume": …, "count": …, "points": …}`) to override
+individual weights.
 
 **The completed-torrent count is a lower bound**, and `/status` prints it as `≥ n`. The
 tracker's own figure is a lifetime count it never lowers, and nothing this service can reach

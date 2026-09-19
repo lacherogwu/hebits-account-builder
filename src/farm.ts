@@ -209,7 +209,7 @@ export function newlyCompleted(entries: Record<string, CompletedEntry>, torrents
 }
 
 // --- Weights and presets ----------------------------------------------------------------
-// A preset is a weighting across the three farmable dimensions. It decides WHICH candidates
+// A preset is a weighting across the four dimensions. It decides WHICH candidates
 // win the day's scarce slots; it never decides whether a candidate is allowed at all. Every
 // filter and every safety check in pickGrabs runs identically under every preset.
 //
@@ -225,20 +225,28 @@ export interface FarmWeights {
   ratio: number;
   volume: number;
   count: number;
+  points: number;
 }
 
 export const PRESETS = {
   // The safety preset, and what recommendPreset() forces whenever the ratio is at or below
   // the floor. Everything else is worthless from a demoted or download-blocked account.
-  'ratio-first': { ratio: 1, volume: 0, count: 0 },
+  'ratio-first': { ratio: 1, volume: 0, count: 0, points: 0 },
   // Nothing is the binding constraint: keep earning on every dimension at once.
-  balanced: { ratio: 0.5, volume: 0.25, count: 0.25 },
+  balanced: { ratio: 0.4, volume: 0.2, count: 0.2, points: 0.2 },
   // GB downloaded is what is missing. Still ratio-aware, because spending the ratio to get
   // there is how an account ends up demoted one rung below where it started.
-  'volume-first': { ratio: 0.25, volume: 0.75, count: 0 },
+  'volume-first': { ratio: 0.25, volume: 0.75, count: 0, points: 0 },
   // The torrent count is what is missing - the dimension an account can sit at target ratio
   // and target volume and still fail on forever.
-  'count-first': { ratio: 0.25, volume: 0, count: 0.75 },
+  'count-first': { ratio: 0.25, volume: 0, count: 0.75, points: 0 },
+  // Bonus points, not rank. The rank ladder asks for ratio, GB and completed torrents;
+  // points are a separate currency that buys upload credit, freeleech tokens and HnR
+  // removals from Heb User upwards. An account that has met every farmable requirement of
+  // the rank it is chasing has nothing left to farm FOR - this is what it does instead.
+  // Still ratio-aware, like every other focused preset: points are worthless on an account
+  // that has been demoted or blocked from downloading.
+  'points-first': { ratio: 0.25, volume: 0, count: 0, points: 0.75 },
 } as const satisfies Record<string, FarmWeights>;
 
 export type PresetName = keyof typeof PRESETS;
@@ -358,7 +366,9 @@ export function rankProgress(input: ProgressInput): RankProgress {
   else if (binding === 'ratio') preset = 'ratio-first';
   else if (binding === 'volume') preset = 'volume-first';
   else if (binding === 'torrents') preset = 'count-first';
-  else preset = 'balanced';
+  // Nothing farmable is behind. Chasing rank requirements that are already met earns
+  // nothing, so earn the other currency instead - see the 'points-first' note above.
+  else preset = 'points-first';
 
   const parts = [
     `ratio ${fmtRatio(ratio)}/${needRatio}${dims.ratio.met ? ' ✓' : ''}`,
@@ -453,7 +463,7 @@ export interface ResolvedWeights {
   weights: FarmWeights;
 }
 
-const weightsTotal = (w: FarmWeights): number => w.ratio + w.volume + w.count;
+const weightsTotal = (w: FarmWeights): number => w.ratio + w.volume + w.count + w.points;
 
 // Precedence: explicit per-dimension weights, then a pinned preset name, then the
 // recommendation. A pinned name this build does not know falls through to the recommendation
@@ -467,6 +477,7 @@ export function resolveWeights(opts: GrabOptions | undefined, progress: RankProg
     if (Number.isFinite(over.ratio)) weights.ratio = over.ratio as number;
     if (Number.isFinite(over.volume)) weights.volume = over.volume as number;
     if (Number.isFinite(over.count)) weights.count = over.count as number;
+    if (Number.isFinite(over.points)) weights.points = over.points as number;
     // A weighting that sums to nothing expresses no preference at all, which would leave the
     // order of the day's grabs to whatever the tracker happened to list first. Fall back to
     // the preset it was meant to modify.
@@ -491,6 +502,15 @@ function rawDimensions(it: HebitsTorrent): FarmWeights {
     // One completed torrent is one completed torrent whatever it weighs, so prefer the ones
     // that finish soonest and cost the least disk.
     count: 1 / (1 + sizeGB),
+    // Bonus points earned per hour of seeding, per unit of ratio damage - the same
+    // per-unit-of-cost shape as `ratio` above, so the two are comparable. seedMonths is 0
+    // because this scores the torrent on the day it is grabbed; the age multiplier applies
+    // equally to every candidate and so cannot change their order.
+    //
+    // This pulls AGAINST `ratio` and `count` on purpose, which is the whole reason it is a
+    // separate dimension rather than a relabelling: points want large and few-seeded, demand
+    // wants many leechers, and count wants small. A preset decides that trade.
+    points: pointsPerHour(it.size, it.seeders ?? 0) / (1 + countedGB),
   };
 }
 
@@ -517,9 +537,13 @@ function scoreCandidates(items: HebitsTorrent[], weights: FarmWeights): Map<Hebi
   const ratio = normalise(raw.map((r) => r.ratio));
   const volume = normalise(raw.map((r) => r.volume));
   const count = normalise(raw.map((r) => r.count));
+  const points = normalise(raw.map((r) => r.points));
   const scores = new Map<HebitsTorrent, number>();
   items.forEach((it, i) => {
-    scores.set(it, weights.ratio * (ratio[i] ?? 0) + weights.volume * (volume[i] ?? 0) + weights.count * (count[i] ?? 0));
+    scores.set(
+      it,
+      weights.ratio * (ratio[i] ?? 0) + weights.volume * (volume[i] ?? 0) + weights.count * (count[i] ?? 0) + weights.points * (points[i] ?? 0),
+    );
   });
   return scores;
 }

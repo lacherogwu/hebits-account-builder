@@ -162,11 +162,13 @@ test('an undetermined torrent count is reported as unknown and steers nothing', 
   expect(unknown.torrents.known).toBe(false);
   expect(unknown.summary).toContain('torrents unknown/50');
   // Ratio 3.0/1.5 and volume 100/75 are both met, so with no count to go on there is nothing
-  // binding - and, crucially, the recommendation is not count-first.
+  // binding - and, crucially, the recommendation is not count-first. With no rank requirement
+  // outstanding the answer is points-first: there is nothing left to farm FOR, so earn the
+  // other currency.
   expect(unknown.binding).toBeNull();
-  expect(unknown.preset).toBe('balanced');
+  expect(unknown.preset).toBe('points-first');
   // The control: the SAME account with the count actually determined does steer by it. If
-  // this said 'balanced' too, the assertion above would be pinning nothing.
+  // this said 'points-first' too, the assertion above would be pinning nothing.
   const known = rankProgress({ ...input, completed: { count: 3, exact: false, basis: 'test' } });
   expect(known.binding).toBe('torrents');
   expect(known.preset).toBe('count-first');
@@ -223,8 +225,9 @@ test('below the required ratio, ratio wins whatever the target rank and whatever
   const healthy = { uploaded: 100 * GB, downloaded: 20 * GB, completed: { count: 0, exact: false, basis: 'test' } };
   // Toward Heb Lover: 0 of 50 torrents is further behind than 20 of 75 GB, so the count wins.
   expect(recommendPreset({ ...healthy, targetRank: 'Heb Lover' })).toBe('count-first');
-  // Toward Heb User, which asks for no torrent count: ratio and volume are both met already.
-  expect(recommendPreset({ ...healthy, targetRank: 'Heb User' })).toBe('balanced');
+  // Toward Heb User, which asks for no torrent count: ratio and volume are both met already,
+  // so nothing is binding and the answer is points-first rather than any rank dimension.
+  expect(recommendPreset({ ...healthy, targetRank: 'Heb User' })).toBe('points-first');
 });
 
 test('the demotion line of the rank held is a floor of its own', () => {
@@ -289,13 +292,22 @@ test('each preset wins a different torrent when the dimensions conflict', () => 
 });
 
 test('balanced is its own preset, not a relabelling of ratio-first', () => {
-  // ratioBest leads on demand; blended is a counted grab that leads on BOTH volume and count.
-  // ratio-first follows the demand; balanced trades it for the two dimensions it also weighs.
-  const ratioBest = item({ id: 9101, size: 12 * GB, seeders: 1, leechers: 5 });
-  const blended = item({ id: 9102, size: 6 * GB, downloadFactor: 0.5, seeders: 1, leechers: 8 });
-  const filler = item({ id: 9103, size: 30 * GB, seeders: 20, leechers: 0 });
+  // ratioBest is small, freeleech and in demand, so it leads BOTH ratio and count. blended is
+  // a big counted grab with far more leechers but a real ratio cost, so it leads volume and
+  // points while placing second on ratio - a counted torrent's demand is divided by what it
+  // will cost, which is the whole meaning of that dimension.
+  //
+  // ratio-first therefore takes ratioBest. balanced weighs four dimensions, wins three of
+  // them on blended, and trades the demand away. If balanced ever picked ratioBest here it
+  // would be ratio-first under another name.
+  const ratioBest = item({ id: 9101, size: 1.5 * GB, seeders: 2, leechers: 60 });
+  const blended = item({ id: 9102, size: 14 * GB, downloadFactor: 0.5, seeders: 1, leechers: 200 });
+  const filler = item({ id: 9103, size: 4 * GB, seeders: 30, leechers: 1 });
   const set = [ratioBest, blended, filler];
   const pick = (preset: string) => pickGrabs(set, ctx({ stats: rich, opts: { maxPerRun: 1, preset } })).map((p) => p.item.id);
+  // Each is individually grabbable, so every pick above is a choice between live options
+  // rather than the last one standing after a filter.
+  for (const c of set) expect(pickGrabs([c], ctx({ stats: rich, opts: { maxPerRun: 1 } })).map((p) => p.item.id)).toEqual([c.id]);
   expect(pick('ratio-first')).toEqual([ratioBest.id]);
   expect(pick('balanced')).toEqual([blended.id]);
 });
@@ -308,7 +320,7 @@ test('explicit weights override the preset, and a weighting that expresses nothi
   // a preset whose weights are not the ones in force.
   expect(resolveWeights({ preset: 'count-first', weights: { ratio: 9 } }, progress)).toEqual({
     preset: 'custom',
-    weights: { ratio: 9, volume: 0, count: 0.75 },
+    weights: { ratio: 9, volume: 0, count: 0.75, points: 0 },
   });
   // All-zero weights express no preference at all, which would leave the day's grabs in
   // whatever order the tracker happened to list them. Fall back to the preset being modified.
@@ -337,11 +349,17 @@ test('with nothing configured the policy farms the recommended preset', () => {
   expect(recommendPreset({ uploaded: 50 * GB, downloaded: 0 })).toBe('volume-first');
   expect(onePick({})).toEqual([volumePick.id]);
   // Once the volume target is met the recommendation moves, and so does the pick. Heb User
-  // asks for no torrent count, so with ratio and volume both met the answer is balanced.
+  // asks for no torrent count, so with ratio and volume both met nothing is binding at all,
+  // and the answer is points-first.
   const done = { ...baseStats, uploaded: 200 * GB, downloaded: 30 * GB };
-  expect(recommendPreset({ uploaded: 200 * GB, downloaded: 30 * GB, targetRank: 'Heb User' })).toBe('balanced');
+  expect(recommendPreset({ uploaded: 200 * GB, downloaded: 30 * GB, targetRank: 'Heb User' })).toBe('points-first');
+  // ...and points-first takes bulkFree: much the biggest torrent on offer and freeleech, so
+  // it earns the most bonus points per hour at no ratio cost at all. That is a different
+  // torrent from the one every rank-chasing preset wants, which is the point of the preset
+  // existing - ratioPick leads demand, countPick is cheapest to complete, and neither earns
+  // points like 30 GB of freeleech does.
   expect(pickGrabs(conflicted, ctx({ stats: done, opts: { maxPerRun: 1, targetRank: 'Heb User' } })).map((p) => p.item.id)).toEqual([
-    ratioPick.id,
+    bulkFree.id,
   ]);
 });
 
@@ -353,7 +371,8 @@ test('no preset - not even an absurd one - takes a counted grab that breaches th
   expect(requiredRatioFor(12 * GB)).toBe(0.7);
   const weightings: GrabOptions[] = [
     ...PRESET_NAMES.map((preset) => ({ preset })),
-    { weights: { ratio: 0, volume: 1000, count: 0 } },
+    { weights: { ratio: 0, volume: 1000, count: 0, points: 0 } },
+    { weights: { ratio: 0, volume: 0, count: 0, points: 1000 } },
     { weights: { ratio: 0, volume: 0, count: 1000 } },
     { weights: { ratio: -50, volume: 1e9, count: 1e9 } },
   ];
@@ -488,4 +507,59 @@ test('only unstamped, complete, known torrents are put forward for stamping', ()
   // 'ddd' is complete in qBittorrent and is not this service's torrent, so it is not counted
   // and not stamped: the index is what decides membership.
   expect(countCompleted(entries, list)?.count).toBe(2);
+});
+
+// --- points-first ---------------------------------------------------------------------------
+// Bonus points are not a rank requirement; they are the other currency, and they pull against
+// the rank dimensions. A preset that picked the same torrent as the rank presets would be a
+// relabelling, so these prove it picks differently and for the documented reason.
+
+test('points-first takes the torrent every rank preset passes over', () => {
+  // bulkFree is much the biggest and freeleech: the most points per hour, at no ratio cost.
+  // Every rank-chasing preset wants something else - demand, counted GB, or a cheap finish.
+  expect(onePick({ preset: 'points-first' })).toEqual([bulkFree.id]);
+  expect(onePick({ preset: 'ratio-first' })).toEqual([ratioPick.id]);
+  expect(onePick({ preset: 'volume-first' })).toEqual([volumePick.id]);
+  expect(onePick({ preset: 'count-first' })).toEqual([countPick.id]);
+});
+
+test('the points dimension prefers big and rarely seeded, which is what the formula pays for', () => {
+  // Same freeleech cost, same demand: only size and seeder count differ, which is exactly
+  // what pointsPerHour is a function of. Without a points weight nothing here separates them.
+  const bigRare = item({ id: 9401, size: 20 * GB, seeders: 2, leechers: 4 });
+  const bigCommon = item({ id: 9402, size: 20 * GB, seeders: 60, leechers: 4 });
+  const smallRare = item({ id: 9403, size: 3 * GB, seeders: 2, leechers: 4 });
+  const set = [bigCommon, smallRare, bigRare];
+  const pick = (opts: GrabOptions) => pickGrabs(set, ctx({ stats: rich, opts: { maxPerRun: 1, ...opts } })).map((p) => p.item.id);
+
+  expect(pick({ preset: 'points-first' })).toEqual([bigRare.id]);
+
+  // The controls isolate the formula's two inputs with a PURE points weighting. Using the
+  // points-first preset here would not isolate anything: it still carries ratio 0.25, and
+  // demand is itself a function of the seeder count - so a points term that ignored seeders
+  // entirely would still pick bigRare, through the ratio dimension, and the assertion would
+  // pass while proving nothing.
+  const purePoints = { weights: { ratio: 0, volume: 0, count: 0, points: 1 } };
+  expect(pick({ ...purePoints })).toEqual([bigRare.id]);
+  // Seeders alone, at equal size.
+  expect(pickGrabs([bigCommon, bigRare], ctx({ stats: rich, opts: { maxPerRun: 1, ...purePoints } })).map((p) => p.item.id)).toEqual([
+    bigRare.id,
+  ]);
+  // Size alone, at equal rarity.
+  expect(pickGrabs([smallRare, bigRare], ctx({ stats: rich, opts: { maxPerRun: 1, ...purePoints } })).map((p) => p.item.id)).toEqual([
+    bigRare.id,
+  ]);
+  // And count-first, which weighs the opposite way, takes the small one - so the set really
+  // does discriminate rather than having one obvious winner.
+  expect(pick({ preset: 'count-first' })).toEqual([smallRare.id]);
+});
+
+test('a points weight can be overridden on its own, like every other dimension', () => {
+  const progress = rankProgress({ uploaded: 50 * GB, downloaded: 0, targetRank: 'Heb User' });
+  expect(resolveWeights({ preset: 'ratio-first', weights: { points: 5 } }, progress)).toEqual({
+    preset: 'custom',
+    weights: { ratio: 1, volume: 0, count: 0, points: 5 },
+  });
+  // A points-only weighting still expresses a preference, so it is not the all-zero fallback.
+  expect(resolveWeights({ preset: 'ratio-first', weights: { ratio: 0, points: 1 } }, progress).preset).toBe('custom');
 });
