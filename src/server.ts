@@ -17,6 +17,13 @@ import { QBit } from './qbit';
 import { Store } from './store';
 import { VERSION } from './version';
 
+// Declared before anything that is handed it as a callback: `const` is in its temporal dead
+// zone until this line runs, and Store's constructor calls its logger synchronously when
+// state.json is corrupt. With `log` below, that call would be a ReferenceError at module
+// load - the silent KeepAlive restart loop the store's own recovery exists to prevent.
+const log = (...a: unknown[]): void => console.log(new Date().toISOString(), ...a);
+const GB = 1024 ** 3;
+
 const cfg = loadConfig();
 const store = new Store(CONFIG_DIR, cfg.timezone, (m) => log(m));
 // Startup is unconditional: this is the only way to install a cookie, so a server that
@@ -40,8 +47,6 @@ const notifier = new Notifier(
   () => store.save(),
   (m) => log(m),
 );
-const log = (...a: unknown[]): void => console.log(new Date().toISOString(), ...a);
-const GB = 1024 ** 3;
 
 const { ensureTorrent, daily } = makeGrabber({ cfg, store, hebits, qbit, log });
 
@@ -183,7 +188,10 @@ app.get('/:token/status', async (c) => {
       towardHebUser: `downloaded ${(st.downloaded / GB).toFixed(1)}/20 GB, ratio ${st.downloaded ? (st.uploaded / st.downloaded).toFixed(2) : '∞'}/1.25`,
     },
     downloadsToday: `${d.used}/${d.limit}`,
-    health: { ...health, logFile: LOG_FILE, configIssues: cfg.configIssues },
+    // storeIssue: a state.json that had to be moved aside resets the fallback download count
+    // and empties the torrent index, so it belongs next to configIssues rather than only in
+    // the log line nobody was watching when the process started.
+    health: { ...health, logFile: LOG_FILE, configIssues: cfg.configIssues, storeIssue: store.loadIssue },
     recentActivity: (store.data.farmLog || []).slice(-20).reverse(),
     freeGB: Math.round(((await qbit.freeSpace()) || 0) / GB),
     torrents: Object.entries(store.data.torrents)
