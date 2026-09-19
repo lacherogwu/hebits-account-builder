@@ -203,9 +203,9 @@ test('the minWatchAgeDays guard follows a configured watchCategory, not the hard
   expect(out.map((x) => x.hash).sort()).toEqual(['on-demand-old', 'renamed-default']);
 });
 
-// --- The four HebitsTorrent field mappings that change behaviour silently (spec §4) ---
+// --- Four field mappings that change behaviour silently if they drift ---
 
-test('H1: a numeric id matches a string key in `known`', () => {
+test('a torrent already in the store is not grabbed again', () => {
   const it = torrent({ id: 12345, uploadedAt: new Date(now - HOUR) });
   // Control first: with `known` empty this torrent IS grabbed, so the empty result below is
   // attributable to `known` and not to some other filter quietly rejecting the fixture.
@@ -216,7 +216,7 @@ test('H1: a numeric id matches a string key in `known`', () => {
   expect(picks).toEqual([]);
 });
 
-test('H2: uploadedAt is a Date, and age filtering uses its epoch value', () => {
+test('only torrents inside the age window are grabbed', () => {
   // `leechers` is explicit: at 2 h these are past quietAfterHours, so clearing that filter is
   // a precondition of this test rather than an accident of the factory's defaults.
   const young = torrent({ uploadedAt: new Date(now - 2 * HOUR), leechers: 2 });
@@ -229,7 +229,7 @@ test('H2: uploadedAt is a Date, and age filtering uses its epoch value', () => {
   expect(picked).toEqual([young.id]);
 });
 
-test('H3: only Hebits categories 1 and 2 are farmed', () => {
+test('only movies and TV are farmed', () => {
   const mk = (categoryId: number) => torrent({ categoryId, uploadedAt: new Date(now - HOUR) });
   const picked = (c: number) => pickGrabs([mk(c)], ctx()).length;
   expect(picked(1)).toBe(1); // Movies
@@ -240,7 +240,7 @@ test('H3: only Hebits categories 1 and 2 are farmed', () => {
   expect(picked(9)).toBe(0); // Porn
 });
 
-test('H4: leechers is the leecher count, so demand ranks by real demand', () => {
+test('torrents with more leechers per seeder rank higher', () => {
   const busy = torrent({ seeders: 10, leechers: 3, uploadedAt: new Date(now - HOUR) });
   const quiet = torrent({ seeders: 10, leechers: 1, uploadedAt: new Date(now - HOUR) });
   // Under the buggy `leechers - seeders` both clamp to 0 and tie, so this must assert strict

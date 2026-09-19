@@ -122,18 +122,13 @@ export function makeJobs({ cfg, store, hebits, qbit, notifier, ensureTorrent, fa
   }
   const cookiePageUrl = () => `http://${cfg.lanHost || lanAddress()}:${cfg.port}/${cfg.token}/cookie`;
 
-  // Total by construction: every path ends in a notification. The old alert regex
-  // (`/qBittorrent|ECONNREFUSED|fetch failed/i.test(e.message)`) only ever existed to filter
-  // Jackett noise out of a shared catch, and it matches none of hebits-client's errors - not
-  // the typed ones, and not ky's TimeoutError ("Request timed out: GET https://..."), which
-  // the transport rethrows unwrapped when the tracker hangs. Under that regex a hung tracker
-  // stopped all grabbing in silence, so it is gone: nothing here may fail quietly.
+  // Total by construction: every path ends in a notification, so nothing fails quietly. A
+  // hung tracker surfaces as ky's TimeoutError, which the transport rethrows unwrapped and no
+  // message-matching would catch.
   //
-  // LoginExpiredError, ApiError and RateLimitedError are siblings (all extend HebitsError
-  // directly, per hebits-client's errors.d.ts), so no ordering between them can swallow
-  // another; LoginExpiredError is still first because it must route to the login path only and
-  // never also raise a service alert. The HebitsError branch then catches the remaining
-  // subclasses (NotATorrentError, and anything the package adds later).
+  // LoginExpiredError is checked first because it must route to the login path only and never
+  // also raise a service alert. The HebitsError branch catches the rest, including whatever
+  // the package adds later.
   function handleTickError(e: unknown): void {
     if (e instanceof LoginExpiredError) {
       noteLogin(false, e.message);

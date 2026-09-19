@@ -19,16 +19,13 @@ const store = new Store(CONFIG_DIR, cfg.timezone, (m) => log(m));
 // on an empty cookie; calls simply fail (as LoginExpiredError, typically) until a working
 // cookie is pasted through the /cookie page.
 //
-// cookie is a provider, not a bound string: hebits-client@0.2.0+ calls this function fresh
-// before every request (via a ky beforeRequest hook), so a cookie pasted through the /cookie
-// page takes effect on the very next request, with no restart. A plain string would bind
-// whatever readCookie() returned at process start forever - the bug this fixes.
+// cookie is a provider, not a string: it is called fresh before every request, so a cookie
+// pasted through the /cookie page takes effect immediately. A string would bind whatever
+// readCookie() returned at startup.
 //
-// cacheTtlMs: 0 is deliberate, not an option left unset. stats() is otherwise cached for ten
-// minutes, and stale uploaded/downloaded figures feed farm.ts's ratio safety check - so a
-// counted (paid) download could be taken that a fresh read would have skipped. The cost is one
-// extra request at the three call sites that ask; /status already reaches the tracker on every
-// load, because dailyDownloads() bypasses the cache unconditionally.
+// cacheTtlMs: 0 because stale uploaded/downloaded figures feed farm.ts's ratio check, and a
+// counted download could be taken that a fresh read would have skipped. /status already
+// reaches the tracker on every load anyway, since dailyDownloads() never caches.
 const hebits = new Hebits({ cookie: () => readCookie() ?? '', cacheTtlMs: 0 });
 const qbit = new QBit(cfg);
 const notifier = new Notifier(cfg.notify || {}, (store.data.notified ??= {}), () => store.save(), (m) => log(m));

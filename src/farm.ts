@@ -19,9 +19,8 @@ export function pointsPerHour(sizeBytes: number, seeders: number, seedMonths = 0
   return ((sizeBytes / GB) * (0.2 + 0.4 * Math.log(1 + seedMonths))) / Math.log(2 + Math.max(0, seeders) ** 0.7);
 }
 
-// Hebits' own category ids. The Torznab list this replaces ([2000, 5000]) admitted exactly
-// these two: Jackett emits no parent categories, so category 3 arrived as 5050 and category 8
-// (movie packs) as 2090, and neither ever matched.
+// Movies and TV only. Category 8 (movie packs) looks like it belongs here and does not: packs
+// are large and change what the daily allowance is spent on.
 const WANTED_CATEGORY_IDS = [1, 2]; // Movies, TV
 
 export const GRAB_DEFAULTS = {
@@ -67,12 +66,11 @@ export function pickGrabs(items: HebitsTorrent[], ctx: GrabContext): { item: Heb
   let downloaded = stats.downloaded;
 
   const fresh = items
-    // H1: `known` holds Object.keys(store.data.torrents) — strings. HebitsTorrent.id is a
-    // number, so an unconverted `has(it.id)` never matches and every torrent looks new.
+    // `known` holds store keys, which are strings, and `id` is a number - without the
+    // conversion nothing ever matches and every torrent looks new.
     .filter((it) => !ctx.known.has(String(it.id)))
-    // H2: uploadedAt is a Date, not the epoch ms the old pubDate held. .getTime() keeps this
-    // arithmetic in ms: TypeScript rejects `ctx.now - it.uploadedAt` outright, and the
-    // qBittorrent timestamps further down this file are in seconds, so the units must not drift.
+    // Keep this arithmetic in milliseconds; the qBittorrent timestamps further down this
+    // file are in seconds, so the units must not drift.
     .filter((it) => ctx.now - it.uploadedAt.getTime() <= o.maxAgeHours * HOUR)
     .filter((it) => WANTED_CATEGORY_IDS.includes(it.categoryId))
     .filter((it) => it.size >= o.minSizeGB * GB && it.size <= o.maxSizeGB * GB)
@@ -105,9 +103,8 @@ export function pickGrabs(items: HebitsTorrent[], ctx: GrabContext): { item: Heb
   return picks;
 }
 
-// H4: HebitsTorrent.leechers IS the leecher count. The Torznab version subtracted seeders from
-// `peers` (a total) to recover it; keeping that subtraction here would compute
-// leechers - seeders, which clamps to 0 for most healthy torrents and flattens `demand`.
+// `leechers` is already the leecher count, not a total - do not subtract seeders from it, or
+// `demand` clamps to 0 for most healthy torrents and stops ranking anything.
 const leechers = (it: HebitsTorrent) => Math.max(0, it.leechers ?? 0);
 const demand = (it: HebitsTorrent) => ((leechers(it) + 1) / ((it.seeders ?? 0) + 1)) * (it.uploadFactor || 1);
 
