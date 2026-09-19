@@ -269,7 +269,11 @@ every decision at a dimension nobody measured.
   - Ranks candidates by the preset in force (see above). Skips releases older than 1 h that
     nobody is downloading.
   - x2/x3-upload releases rank higher.
-  - At most 2 grabs per hour, so later releases in the day still get a slot.
+  - Paced so the day's allowance is not spent in the first hour and a better release later
+    still finds a slot: the farmable allowance (`dailyLimit` minus `keepForUser`) spread over
+    12 hours, with a floor of 2 an hour. That is always at least twice what a full day of
+    grabbing needs, so pacing never costs a download at any rank — as the old fixed 2 an hour
+    did from Heb Lover upward. Pin it with `farm.maxPerHour` if you want a hard ceiling.
   - Leaves `keepForUser` (3) daily downloads and `reserveGB` (40 GB) of disk free.
 - **Release** (every 30 min), only when free space drops under 40 GB.
   - Candidates: finished torrents this service manages, seeded ≥ 8 days, with ≥ 5 seeders.
