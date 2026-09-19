@@ -2524,7 +2524,7 @@ var Doc = class {
 };
 //#endregion
 //#region node_modules/zod/v4/core/versions.js
-const version = {
+const version$1 = {
 	major: 4,
 	minor: 6,
 	patch: 5
@@ -2536,7 +2536,7 @@ const $ZodType = /*@__PURE__*/ $constructor("$ZodType", (inst, def) => {
 	inst ?? (inst = {});
 	inst._zod.def = def;
 	inst._zod.bag = inst._zod.bag || {};
-	inst._zod.version = version;
+	inst._zod.version = version$1;
 	const defChecks = inst._zod.def.checks;
 	const checks = inst._zod.traits.has("$ZodCheck") ? [inst, ...defChecks ?? []] : defChecks?.length ? [...defChecks] : [];
 	for (const ch of checks) for (const fn of ch._zod.onattach) fn(inst);
@@ -10607,7 +10607,13 @@ const cleanupOptionsShape = {
 	minWatchAgeDays: number(),
 	watchCategory: string()
 };
-const notifyShape = { webhookUrl: string() };
+const notifyShape = {
+	webhookUrl: string(),
+	method: string(),
+	headers: record(string(), union([string(), number()])),
+	body: string(),
+	command: array(string())
+};
 const fieldSchemas = {
 	port: number(),
 	lanHost: string(),
@@ -10635,6 +10641,24 @@ function logIssue(msg, issues) {
 	console.error(`config: ${msg}`);
 	issues.push(msg);
 }
+const TOKEN_SHAPE = /^[0-9a-f]{32}$/;
+function salvageToken(rawText) {
+	const found = [];
+	const valid = [];
+	for (const match of rawText.matchAll(/"token"\s*:\s*"([^"]*)"/g)) {
+		const candidate = match[1] ?? "";
+		found.push(candidate);
+		if (TOKEN_SHAPE.test(candidate)) valid.push(candidate);
+	}
+	const only = valid[0];
+	if (valid.length === 1 && only !== void 0) return {
+		token: only,
+		note: ", kept its token so the existing admin URLs keep working"
+	};
+	if (valid.length > 1) return { note: `, and ${valid.length} token-shaped values were found in it so none could be trusted (a nested "token", e.g. a notify header, looks the same to a text search) - a fresh token was generated` };
+	if (found.length > 0) return { note: ", and the \"token\" in it is not the expected 32-character lowercase-hex shape - a fresh token was generated" };
+	return { note: "" };
+}
 function validateScalar(key, schema, fallback, received, issues) {
 	const result = schema.safeParse(received);
 	if (result.success) return result.data;
@@ -10646,10 +10670,12 @@ function validateOptions(name, shape, fallback, received, issues) {
 		return {};
 	}
 	const out = { ...received };
+	const defaults = fallback;
 	for (const [key, schema] of Object.entries(shape)) {
 		if (!(key in out)) continue;
 		if (!schema.safeParse(out[key]).success) {
-			logIssue(`"${name}.${key}" is a ${typeOf(out[key])}, not the expected type - using default ${JSON.stringify(fallback[key])}`, issues);
+			const fix = key in defaults ? `using default ${JSON.stringify(defaults[key])}` : "ignoring it";
+			logIssue(`"${name}.${key}" is a ${typeOf(out[key])}, not the expected type - ${fix}`, issues);
 			delete out[key];
 		}
 	}
@@ -10660,15 +10686,49 @@ function loadConfig() {
 		recursive: true,
 		mode: 448
 	});
+	const configIssues = [];
 	let saved = {};
-	if (existsSync(CONFIG_FILE)) saved = JSON.parse(readFileSync(CONFIG_FILE, "utf8"));
-	let token = saved.token;
+	let canWrite = true;
+	let justRecovered = false;
+	if (existsSync(CONFIG_FILE)) {
+		let raw;
+		try {
+			raw = readFileSync(CONFIG_FILE, "utf8");
+		} catch (e) {
+			canWrite = false;
+			logIssue(`config.json exists but could not be read (${e.message}) - running from in-memory defaults only, config.json left untouched`, configIssues);
+		}
+		if (raw !== void 0) try {
+			const parsed = JSON.parse(raw);
+			if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error(`it holds a JSON ${typeOf(parsed)}, not an object of settings`);
+			saved = parsed;
+		} catch (e) {
+			const badPath = `${CONFIG_FILE}.bad-${Date.now()}`;
+			const salvaged = salvageToken(raw);
+			if (salvaged.token) saved.token = salvaged.token;
+			try {
+				renameSync(CONFIG_FILE, badPath);
+				justRecovered = true;
+				logIssue(`config.json could not be loaded (${e.message}) - the original was moved to ${badPath}; starting from defaults${salvaged.note}`, configIssues);
+			} catch (renameError) {
+				canWrite = false;
+				logIssue(`config.json could not be loaded (${e.message}) and could not be moved aside (${renameError.message}) - running from in-memory defaults only, config.json left untouched`, configIssues);
+			}
+		}
+	}
+	if (saved.token !== void 0 && typeof saved.token !== "string") logIssue(`"token" is a ${typeOf(saved.token)}, not a string - a fresh token was generated, so the admin URLs changed`, configIssues);
+	let token = typeof saved.token === "string" ? saved.token : void 0;
+	let tokenWasGenerated = false;
 	if (!token) {
 		token = randomBytes(16).toString("hex");
 		saved.token = token;
-		writeFileSync(CONFIG_FILE, `${JSON.stringify(saved, null, 2)}\n`, { mode: 384 });
+		tokenWasGenerated = true;
 	}
-	const configIssues = [];
+	if (canWrite && (tokenWasGenerated || justRecovered)) try {
+		writeFileSync(CONFIG_FILE, `${JSON.stringify(saved, null, 2)}\n`, { mode: 384 });
+	} catch (e) {
+		logIssue(`config.json could not be written (${e.message}) - the builder is running with a token that exists only in memory, so it will change on the next restart; fix the permissions on ${CONFIG_DIR}`, configIssues);
+	}
 	const validated = { ...saved };
 	for (const [key, schema] of Object.entries(fieldSchemas)) {
 		if (!(key in saved)) continue;
@@ -10694,10 +10754,23 @@ function loadConfig() {
 		token,
 		configIssues
 	};
-	mkdirSync(cfg.torrentDir, {
-		recursive: true,
-		mode: 448
-	});
+	try {
+		mkdirSync(cfg.torrentDir, {
+			recursive: true,
+			mode: 448
+		});
+	} catch (e) {
+		logIssue(`"torrentDir" (${cfg.torrentDir}) could not be created: ${e.message} - using default`, configIssues);
+		cfg.torrentDir = DEFAULTS.torrentDir;
+		try {
+			mkdirSync(cfg.torrentDir, {
+				recursive: true,
+				mode: 448
+			});
+		} catch (e2) {
+			logIssue(`the default torrentDir (${cfg.torrentDir}) could not be created either: ${e2.message} - grabbing will fail until this is fixed`, configIssues);
+		}
+	}
 	return cfg;
 }
 function readCookie() {
@@ -10941,7 +11014,8 @@ function makeGrabber({ cfg, store, hebits, qbit, log }) {
 				const d = await daily();
 				if (d.used >= d.limit) throw new UserError("daily download limit reached");
 				const free = await qbit.freeSpace();
-				if (meta.size && free !== void 0 && meta.size > free - cfg.minFreeGB * GB$3) throw new UserError("not enough disk space");
+				if (!Number.isFinite(free)) throw new UserError("qBittorrent did not report free disk space");
+				if (meta.size && meta.size > free - cfg.minFreeGB * GB$3) throw new UserError("not enough disk space");
 				buf = await hebits.downloadTorrent(Number(hebitsId));
 				let parsed;
 				try {
@@ -11269,7 +11343,8 @@ function makeJobs({ cfg, store, hebits, qbit, notifier, ensureTorrent, farmLog, 
 				farmLog("release", `${t.name} (${(t.size / GB$1).toFixed(1)} GB, ${t.num_complete} seeders, ratio ${ratio}, seeded ${(t.seeding_time / 86400).toFixed(1)} days)`);
 			}
 			const freeAfter = await qbit.freeSpace();
-			if (freeAfter < (cfg.lowDiskAlertGB ?? 15) * GB$1) alertProblem("disk", "Hebits builder: disk almost full", `${(freeAfter / GB$1).toFixed(1)} GB free and nothing safe left to release.`);
+			if (!Number.isFinite(freeAfter)) alertProblem("disk", "Hebits builder: free disk space unknown", "qBittorrent did not report free disk space, so the low-disk check could not run.");
+			else if (freeAfter < (cfg.lowDiskAlertGB ?? 15) * GB$1) alertProblem("disk", "Hebits builder: disk almost full", `${(freeAfter / GB$1).toFixed(1)} GB free and nothing safe left to release.`);
 			notifier.prune();
 		} catch (e) {
 			log(`cleanup: ${e.message}`);
@@ -11345,11 +11420,12 @@ var Notifier = class {
 	async post(vars) {
 		const { webhookUrl, method = "POST", headers = {}, body = DEFAULT_BODY } = this.cfg;
 		if (!webhookUrl) throw new Error("post: no webhookUrl configured");
+		const stringHeaders = Object.fromEntries(Object.entries(headers).map(([k, v]) => [k, String(v)]));
 		const res = await this.fetch(webhookUrl, {
 			method,
 			headers: {
 				"content-type": "application/json",
-				...headers
+				...stringHeaders
 			},
 			body: renderTemplate(body, vars),
 			signal: AbortSignal.timeout(1e4)
@@ -11472,19 +11548,46 @@ var QBit = class {
 function dayKey(date, timezone) {
 	return new Intl.DateTimeFormat("en-CA", { timeZone: timezone }).format(date);
 }
+function jsonKind(v) {
+	if (v === null) return "null";
+	if (Array.isArray(v)) return "array";
+	return typeof v;
+}
 var Store = class {
 	file;
 	timezone;
 	log;
 	data;
+	loadIssue;
 	constructor(dir, timezone, log = () => {}) {
 		this.file = join(dir, "state.json");
 		this.timezone = timezone;
 		this.log = log;
-		this.data = existsSync(this.file) ? JSON.parse(readFileSync(this.file, "utf8")) : {
+		this.data = {
 			grabs: [],
 			torrents: {}
 		};
+		this.loadIssue = null;
+		if (existsSync(this.file)) try {
+			const parsed = JSON.parse(readFileSync(this.file, "utf8"));
+			if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error(`it holds a JSON ${jsonKind(parsed)}, not an object`);
+			const { grabs, torrents } = parsed;
+			if (!Array.isArray(grabs)) throw new Error(grabs === void 0 ? "it has no \"grabs\" array" : `its "grabs" is a JSON ${jsonKind(grabs)}, not an array`);
+			if (typeof torrents !== "object" || torrents === null || Array.isArray(torrents)) throw new Error(torrents === void 0 ? "it has no \"torrents\" object" : `its "torrents" is a JSON ${jsonKind(torrents)}, not an object`);
+			this.data = parsed;
+		} catch (e) {
+			const badPath = `${this.file}.bad-${Date.now()}`;
+			try {
+				renameSync(this.file, badPath);
+				this.note(`store: state.json could not be loaded (${e.message}) - moved aside to ${badPath}; today's grab count starts over`);
+			} catch (renameError) {
+				this.note(`store: state.json could not be loaded (${e.message}) and could not be moved aside (${renameError.message}) - running with an empty in-memory store; state.json left untouched`);
+			}
+		}
+	}
+	note(message) {
+		this.log(message);
+		this.loadIssue = message;
 	}
 	save() {
 		const tmp = `${this.file}.tmp`;
@@ -11540,6 +11643,8 @@ var Store = class {
 const VERSION = "2.0.0";
 //#endregion
 //#region src/server.ts
+const log = (...a) => console.log((/* @__PURE__ */ new Date()).toISOString(), ...a);
+const GB = 1024 ** 3;
 const cfg = loadConfig();
 const store = new Store(CONFIG_DIR, cfg.timezone, (m) => log(m));
 const hebits = new Hebits({
@@ -11549,8 +11654,6 @@ const hebits = new Hebits({
 const qbit = new QBit(cfg);
 store.data.notified ??= {};
 const notifier = new Notifier(cfg.notify || {}, store.data.notified, () => store.save(), (m) => log(m));
-const log = (...a) => console.log((/* @__PURE__ */ new Date()).toISOString(), ...a);
-const GB = 1024 ** 3;
 const { ensureTorrent, daily } = makeGrabber({
 	cfg,
 	store,
@@ -11670,6 +11773,7 @@ app.get("/:token/notify-test", async (c) => {
 app.get("/:token/status", async (c) => {
 	const d = await daily();
 	const st = await hebits.stats().catch(() => void 0);
+	const freeBytes = await qbit.freeSpace().catch(() => NaN);
 	return json(c, 200, {
 		version: VERSION,
 		account: st && {
@@ -11684,10 +11788,11 @@ app.get("/:token/status", async (c) => {
 		health: {
 			...health,
 			logFile: LOG_FILE,
-			configIssues: cfg.configIssues
+			configIssues: cfg.configIssues,
+			storeIssue: store.loadIssue
 		},
 		recentActivity: (store.data.farmLog || []).slice(-20).reverse(),
-		freeGB: Math.round((await qbit.freeSpace() || 0) / GB),
+		freeGB: Number.isFinite(freeBytes) ? Math.round(freeBytes / GB) : null,
 		torrents: Object.entries(store.data.torrents).filter(([, t]) => t.hash && !t.removedAt).map(([id, t]) => ({
 			id,
 			name: t.name,
