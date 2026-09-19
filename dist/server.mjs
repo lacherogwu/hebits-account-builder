@@ -12176,7 +12176,7 @@ var Store = class {
 };
 //#endregion
 //#region src/version.ts
-const VERSION = "2.0.0";
+const VERSION = "3.0.0";
 //#endregion
 //#region src/server.ts
 const log = (...a) => console.log((/* @__PURE__ */ new Date()).toISOString(), ...a);

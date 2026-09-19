@@ -1,0 +1,34 @@
+# dist/server.mjs is committed on purpose: it is the artefact that gets deployed, and it is
+# what anyone installing this repo by git ref receives. A stale one ships old code with no
+# other symptom, so every push rebuilds here and fails if the result differs from what was
+# committed. The version is also what a deploy checks the running service against, so a
+# stale bundle would report a version it is not.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: dist/ must match src/
+        run: |
+          if ! git diff --exit-code -- dist; then
+            echo "::error::dist/ is stale. Run 'npm run build' and commit the result." >&2
+            exit 1
+          fi
