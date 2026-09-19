@@ -1,12 +1,12 @@
 # Hebits Account Builder
 
-A zero-dependency Node.js service that builds a ratio on [Hebits](https://hebits.net), a
-private Israeli BitTorrent tracker: it grabs freeleech uploads automatically, seeds them,
-and releases them once the disk fills up.
+A Node.js service that builds a ratio on [Hebits](https://hebits.net), a private Israeli
+BitTorrent tracker: it grabs freeleech uploads automatically, seeds them, and releases them
+once the disk fills up.
 
-It talks to [Jackett](https://github.com/Jackett/Jackett) to search Hebits and to
-[qBittorrent](https://www.qbittorrent.org/) to download and seed. It never reaches Hebits
-directly — Jackett already holds a login cookie for the tracker, and this service reads it.
+It talks to Hebits directly through [hebits-client](https://github.com/lacherogwu/hebits-client)
+using a login cookie you paste in through this service's own `/cookie` page, and to
+[qBittorrent](https://www.qbittorrent.org/) to download and seed.
 
 **No debrid service.** Hebits bans debrid services outright; an account that uses one is
 blocked immediately. Nothing here proxies through TorBox, AIOStreams or similar — every
@@ -21,64 +21,55 @@ itself.
 ## Requirements
 
 - Node.js ≥ 22
-- [Jackett](https://github.com/Jackett/Jackett), with a **HeBits** Torznab indexer configured
-  (logged in with a valid Hebits cookie)
 - [qBittorrent](https://www.qbittorrent.org/), with the WebUI enabled
+- A Hebits account and a login cookie, pasted in through `/cookie` once the service is
+  running (see [Endpoints](#endpoints))
 
 ## Install
 
 ```bash
 git clone <this repo>
 cd hebits-account-builder
-node server.js
+npm install
+npm run build
+npm start
 ```
 
-There's no build step and no npm install — the repo has zero dependencies. The first run
-creates `~/.config/hebits-account-builder/config.json` with a random `token` and prints
-either the listening banner or an error explaining what to fix (see
-[Configuration](#configuration)).
+`npm run build` bundles the service into a single `dist/server.mjs` (see
+[Deploy](#deploy) for why that matters). The first run creates
+`~/.config/hebits-account-builder/config.json` with a random `token` and prints either the
+listening banner or an error explaining what to fix (see [Configuration](#configuration)).
+Until a cookie is saved through `/cookie`, the service starts fine but reports Hebits login
+as failing.
 
 ## Configuration
 
 Settings live in `~/.config/hebits-account-builder/config.json` (mode `600`), overriding the
-defaults in `lib/config.js`. Override the directory itself with the `HEBITS_BUILDER_DIR`
-environment variable. See `config.example.json` for a starting point.
+defaults in `src/config.ts`. Override the directory itself with the `HEBITS_BUILDER_DIR`
+environment variable. See `deploy/config.example.json` for a starting point.
 
 | Key | Default | Meaning |
 |---|---|---|
 | `token` | random, generated on first run | Secret path segment every route sits behind |
 | `port` | `7001` | Listen port, all interfaces |
 | `lanHost` | empty (auto-detected) | LAN address used in links such as the cookie-update alert; set it if auto-detection picks the wrong interface |
-| `dailyLimit` | `10` | Fallback only; the real counter is read from the Hebits profile page |
+| `dailyLimit` | `10` | Fallback only; the real counter is read from Hebits through `hebits-client` |
 | `dailyLimitByDay` | `{}` | Per-day overrides, e.g. `{"2026-09-17": 5}` for a new account's first day |
 | `minFreeGB` | `20` | Free disk space to keep after a download |
 | `timezone` | `Asia/Jerusalem` | Used for the daily download counter's day boundary |
-| `jackettUrl` | `http://127.0.0.1:9117` | Jackett base URL |
-| `jackettIndexer` | `hebits` | Jackett Torznab indexer id |
-| `jackettConfig` | Jackett's `ServerConfig.json`, auto-located per OS | Where the Jackett API key is read from |
-| `jackettIndexerConfig` | Jackett's indexer config, auto-located per OS | Where the Hebits login cookie is read from |
-| `jackettApiKey` | read from `jackettConfig` | Set this directly to skip that read |
 | `qbitUrl` | `http://127.0.0.1:8080` | qBittorrent WebUI base URL |
 | `qbitUsername`, `qbitPassword` | empty | Only needed if qBittorrent's "bypass authentication for clients on localhost" is off |
 | `watchCategory`, `watchPath` | `watch`, `~/hebits/watch` | Category/path for torrents grabbed on demand (for a companion streaming addon) |
 | `seedCategory`, `seedPath` | `seed-auto`, `~/hebits/seed` | Category/path for torrents auto-grabbed to build the account |
-| `farm` | `{"enabled": true, "intervalMin": 10}` | Auto-grab job; see `GRAB_DEFAULTS` in `lib/farm.js` for tuning knobs (`keepForUser`, `reserveGB`, `maxSizeGB`, …) |
-| `cleanup` | `{"enabled": true, "intervalMin": 30}` | Auto-release job; see `CLEANUP_DEFAULTS` in `lib/farm.js` (`reserveGB`, `minSeedDays`, `keepIfSeedersBelow`, …) |
+| `farm` | `{"enabled": true, "intervalMin": 10}` | Auto-grab job; see `GRAB_DEFAULTS` in `src/farm.ts` for tuning knobs (`keepForUser`, `reserveGB`, `maxSizeGB`, …) |
+| `cleanup` | `{"enabled": true, "intervalMin": 30}` | Auto-release job; see `CLEANUP_DEFAULTS` in `src/farm.ts` (`reserveGB`, `minSeedDays`, `keepIfSeedersBelow`, …) |
 | `notify` | `{"webhookUrl": ""}` | Alert transport; see [Notifications](#notifications) |
 | `lowDiskAlertGB` | `15` | Alert threshold after a release pass still leaves the disk full |
 | `torrentDir` | `<config dir>/torrents` | Where downloaded `.torrent` files are cached |
 | `logFile` | `<config dir>/builder.log` | If something redirects this process's stdout there, it's truncated (with a `.1` backup) once it passes 20 MB |
 
-Jackett's API key and the Hebits login cookie are both read from Jackett's own files, never
-stored in this repository.
-
-### Jackett's API key
-
-On startup, if `jackettApiKey` isn't set in `config.json`, this service reads it from
-Jackett's `ServerConfig.json`. If that file can't be read (Jackett isn't installed yet, or
-lives somewhere non-standard) or has no key set, the service refuses to start and prints
-exactly what's wrong and where — set `jackettApiKey` and `jackettConfig` in `config.json` to
-work around either case.
+The Hebits login cookie itself is not a `config.json` key — it lives in `cookie.txt` next to
+`config.json`, written by `/cookie` once a paste passes verification.
 
 ## Endpoints
 
@@ -89,9 +80,10 @@ unknown route — the token isn't revealed by the response.
 - **`/status`** — JSON: account class, upload/download totals, ratio, progress toward the
   **Heb User** rank, today's download count, Hebits login health, free disk space, the last
   20 grab/release/error events, and the torrents currently managed.
-- **`/cookie`** — GET returns a form to paste a fresh Hebits login cookie; POST saves it
-  through Jackett's admin API and verifies it by loading the account's stats page. Use this
-  whenever the Hebits login expires (an alert fires when it does).
+- **`/cookie`** — GET returns a form to paste a fresh Hebits login cookie; POST verifies it
+  directly against Hebits (through `hebits-client`) before saving it, so a bad paste is
+  rejected rather than silently stored. Use this whenever the Hebits login expires (an alert
+  fires when it does).
 - **`/notify-test`** — sends a test alert through whatever transport `notify` is configured
   with, and reports whether it was accepted.
 
@@ -145,11 +137,49 @@ The goal is the **Heb User** rank: 30 days on the site, 20 GB downloaded, and a 
 - **Seeding time only counts from 100%.** An unfinished torrent earns no seed credit, so a
   stalled download is a hit-and-run risk — that's what the stuck-download alert is for.
 
+## Layout
+
+| File | Purpose |
+|---|---|
+| `src/server.ts` | HTTP server: routing, token auth, startup wiring, log rotation, schedules the two jobs |
+| `src/config.ts` | Loads/saves `config.json` and owns the Hebits cookie file |
+| `src/jobs.ts` | The two background jobs (`farmTick`, `cleanupTick`) and login/service health tracking |
+| `src/farm.ts` | Account-building policy: pure functions deciding what to grab and what to release |
+| `src/grab.ts` | Turns a Hebits id into a running qBittorrent torrent: download, add, tag |
+| `src/qbit.ts` | qBittorrent WebUI API client |
+| `src/cookie-page.ts` | The `/cookie` HTML page: paste a cookie, verify it, save it |
+| `src/notify.ts` | Alert transport (webhook and/or local command), with templating and throttling |
+| `src/store.ts` | Persistent JSON state: grab history, torrent index, notifier throttle state |
+| `src/tags.ts` | Builds/parses the qBittorrent tags that record Hebits/IMDb identity |
+| `src/parse.ts` | Release-name parsing: disc/remux detection, season/episode info |
+| `src/bencode.ts` | Minimal bencode reader for `.torrent` files (infohash, name, files, piece length) |
+
+`test/` mirrors `src/` one-to-one (one `*.test.ts` per module), plus `test/factory.ts` for
+shared test fixtures.
+
+## Dependencies
+
+One runtime dependency: [`hebits-client`](https://github.com/lacherogwu/hebits-client), which
+talks to Hebits' JSON API. Everything else (`typescript`, `tsdown`, `vitest`, `@types/node`)
+is a dev dependency needed only to build and test.
+
 ## Tests
 
 ```bash
-node --test
+npm test
 ```
 
-No dependencies, no network access required — the test suite mocks Jackett, qBittorrent and
-Hebits.
+Runs the [vitest](https://vitest.dev/) suite. No network access required — Hebits and
+qBittorrent are mocked throughout.
+
+## Deploy
+
+```bash
+npm run deploy
+```
+
+`scripts/deploy.sh` runs `npm run typecheck` and `npm test`, builds with `npm run build`, and
+copies the single resulting `dist/server.mjs` to the target machine. The target needs a Node
+≥ 22 binary to run it and nothing else — no `node_modules`, no `npm install`, no registry
+access. That's a deliberate improvement over shipping a source tree: the deployed artifact is
+one file.
