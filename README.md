@@ -22,7 +22,7 @@ torrent downloads, seeds and stays on the machine this service runs on.
 ## Install
 
 ```bash
-git clone <this repo>
+git clone https://github.com/lacherogwu/hebits-account-builder.git
 cd hebits-account-builder
 npm install
 npm run build
