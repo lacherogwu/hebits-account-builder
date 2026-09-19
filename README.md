@@ -59,7 +59,7 @@ environment variable. See `deploy/config.example.json` for a starting point.
 | `notify` | `{"webhookUrl": ""}` | Alert transport; see [Notifications](#notifications) |
 | `lowDiskAlertGB` | `15` | Alert threshold after a release pass still leaves the disk full |
 | `torrentDir` | `<config dir>/torrents` | Where downloaded `.torrent` files are cached |
-| `logFile` | `<config dir>/builder.log` | If something redirects this process's stdout there, it's truncated (with a `.1` backup) once it passes 20 MB |
+| `logFile` | `<config dir>/builder.log` | The log the service writes. It logs to stdout, so this must be the same path the LaunchAgent points `StandardOutPath`/`StandardErrorPath` at (`deploy/org.user.hebits-builder.plist` already does); it's truncated in place, with a `.1` backup, once it passes 20 MB |
 
 The Hebits login cookie itself is not a `config.json` key — it lives in `cookie.txt` next to
 `config.json`, written by `/cookie` once a paste passes verification.
@@ -72,7 +72,11 @@ unknown route — the token isn't revealed by the response.
 
 - **`/status`** — JSON: account class, upload/download totals, ratio, progress toward the
   **Heb User** rank, today's download count, Hebits login health, free disk space, the last
-  20 grab/release/error events, and the torrents currently managed.
+  20 grab/release/error events, and the torrents currently managed. It also reports anything
+  that went wrong at startup: `configIssues` (settings that failed validation and fell back to
+  their default) and `storeIssue` (a `state.json` that had to be moved aside). Every reading
+  degrades on its own, so this page still answers when Hebits or qBittorrent is unreachable —
+  `freeGB` is `null` when qBittorrent did not answer, not `0`.
 - **`/cookie`** — GET returns a form to paste a fresh Hebits login cookie; POST verifies it
   directly against Hebits (through `hebits-client`) before saving it, so a bad paste is
   rejected rather than silently stored. Use this whenever the Hebits login expires (an alert
@@ -148,13 +152,16 @@ The goal is the **Heb User** rank: 30 days on the site, 20 GB downloaded, and a 
 | `src/bencode.ts` | Minimal bencode reader for `.torrent` files (infohash, name, files, piece length) |
 
 `test/` mirrors `src/` one-to-one (one `*.test.ts` per module), plus `test/factory.ts` for
-shared test fixtures.
+shared test fixtures and `test/bundle.test.ts`, which tests the built artifact rather than a
+module (see [Tests](#tests)).
 
 ## Dependencies
 
-One runtime dependency: [`hebits-client`](https://github.com/lacherogwu/hebits-client), which
-talks to Hebits' JSON API. Everything else (`typescript`, `tsdown`, `vitest`, `@types/node`)
-is a dev dependency needed only to build and test.
+Four runtime dependencies: [`hebits-client`](https://github.com/lacherogwu/hebits-client),
+which talks to Hebits' JSON API; [`hono`](https://hono.dev/) and `@hono/node-server` for the
+HTTP layer; and [`zod`](https://zod.dev/) to validate `config.json`. All four are bundled into
+`dist/server.mjs` at build time, so the target installs nothing. Everything else (`typescript`,
+`tsdown`, `vitest`, `biome`, `@types/node`) is a dev dependency needed only to build and test.
 
 ## Tests
 
@@ -163,7 +170,16 @@ npm test
 ```
 
 Runs the [vitest](https://vitest.dev/) suite. No network access required — Hebits and
-qBittorrent are mocked throughout.
+qBittorrent are mocked throughout, and the tests that spawn the built bundle point `qbitUrl` at
+a dead port and disable both jobs, so isolation holds by construction rather than by which
+routes happen to be exercised.
+
+`test/bundle.test.ts` is the exception to "`test/` mirrors `src/`": it builds, then runs
+`dist/server.mjs` as a lone file in an empty directory with no `package.json` and no
+`node_modules` — the deployment condition. That is the only place a build that stopped inlining
+`package.json` (which `src/version.ts` imports for `VERSION`) would show up, and the only place
+that proves a corrupt `config.json` or `state.json` leaves a service that still answers rather
+than a launchd restart loop.
 
 ## Deploy
 
@@ -175,3 +191,10 @@ npm run deploy
 copies the single resulting `dist/server.mjs` to the target machine. The target needs a Node
 ≥ 22 binary to run it and nothing else — no `node_modules`, no `npm install`, no registry
 access.
+
+The LaunchAgent itself is installed once, by hand: copy `deploy/org.user.hebits-builder.plist`
+to `~/Library/LaunchAgents/`, replace `__HOME__` with the target's home directory, and
+`launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.user.hebits-builder.plist`. Its
+`StandardOutPath` must stay equal to `logFile` — the service logs to stdout, so if the two
+disagree the rotator truncates a file nothing writes while the real log grows without limit.
+`deploy.sh` checks for that and warns, but does not fix it, since it never touches the plist.
