@@ -7206,9 +7206,12 @@ function createTransport(opts) {
 		redirect: "manual",
 		retry: 0,
 		headers: {
-			cookie,
-			"user-agent": userAgent
-		}
+			"user-agent": userAgent,
+			...typeof cookie === "string" ? { cookie } : {}
+		},
+		...typeof cookie === "function" ? { hooks: { beforeRequest: [({ request }) => {
+			request.headers.set("cookie", cookie());
+		}] } } : {}
 	});
 	const throttledAttempt = pThrottle(rateLimit)(async (path, sp, responseType) => {
 		const res = await client.get(path, sp ? { searchParams: sp } : void 0);
@@ -8255,7 +8258,7 @@ const VERSION = "2.0.0";
 const cfg = loadConfig();
 const store = new Store(CONFIG_DIR, cfg.timezone, (m) => log(m));
 const hebits = new Hebits({
-	cookie: readCookie() ?? "",
+	cookie: () => readCookie() ?? "",
 	cacheTtlMs: 0
 });
 const qbit = new QBit(cfg);
