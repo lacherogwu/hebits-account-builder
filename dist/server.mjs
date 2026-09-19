@@ -10556,7 +10556,7 @@ const COOKIE_FILE = join(CONFIG_DIR, "cookie.txt");
 const DEFAULTS = {
 	port: 7001,
 	lanHost: "",
-	dailyLimit: 10,
+	dailyLimit: 0,
 	dailyLimitByDay: {},
 	minFreeGB: 20,
 	timezone: "Asia/Jerusalem",
@@ -10580,6 +10580,22 @@ const DEFAULTS = {
 	torrentDir: join(CONFIG_DIR, "torrents"),
 	logFile: join(CONFIG_DIR, "builder.log")
 };
+const RANK_NAMES$1 = [
+	"Heb Rookie",
+	"Heb User",
+	"Heb Lover",
+	"Heb Veteran",
+	"Heb Fanatic",
+	"Heb Elite",
+	"Heb Supreme",
+	"Heb Prophet"
+];
+const PRESET_NAMES$1 = [
+	"ratio-first",
+	"balanced",
+	"volume-first",
+	"count-first"
+];
 const grabOptionsShape = {
 	enabled: boolean(),
 	intervalMin: number(),
@@ -10594,7 +10610,14 @@ const grabOptionsShape = {
 	quietAfterHours: number(),
 	countedTargetGB: number(),
 	ratioMargin: number(),
-	targetRatio: number()
+	targetRatio: number(),
+	targetRank: _enum(["auto", ...RANK_NAMES$1]),
+	preset: _enum(PRESET_NAMES$1),
+	weights: object({
+		ratio: number().optional(),
+		volume: number().optional(),
+		count: number().optional()
+	})
 };
 const cleanupOptionsShape = {
 	enabled: boolean(),
@@ -10673,9 +10696,11 @@ function validateOptions(name, shape, fallback, received, issues) {
 	const defaults = fallback;
 	for (const [key, schema] of Object.entries(shape)) {
 		if (!(key in out)) continue;
-		if (!schema.safeParse(out[key]).success) {
+		const result = schema.safeParse(out[key]);
+		if (!result.success) {
 			const fix = key in defaults ? `using default ${JSON.stringify(defaults[key])}` : "ignoring it";
-			logIssue(`"${name}.${key}" is a ${typeOf(out[key])}, not the expected type - ${fix}`, issues);
+			const issue = result.error.issues[0];
+			logIssue(`"${name}.${key}" ${issue?.code === "invalid_value" ? `is ${JSON.stringify(out[key])}, which is not one of ${(issue.values ?? []).map((v) => JSON.stringify(v)).join(", ")}` : `is a ${typeOf(out[key])}, not the expected type`} - ${fix}`, issues);
 			delete out[key];
 		}
 	}
@@ -10853,6 +10878,467 @@ async function handleCookiePage(req, res, { health, farmLog, log, hebits, writeC
 	}
 }
 //#endregion
+//#region src/parse.ts
+function isDiscOrRemux(title) {
+	return /remux/i.test(title) || /\bbdmv\b|\biso\b/i.test(title) || /complete[ ._-]*(uhd[ ._-]*)?blu-?ray/i.test(title) || /blu-?ray/i.test(title) && /\b(hevc|avc|vc-?1|mpeg-?2)\b/i.test(title) && !/x26[45]|h\.?26[45]/i.test(title);
+}
+function seasonInfo(title) {
+	const episodeMatch = title.match(/\bS(\d{1,2})[ ._-]?E(\d{1,3})(?!\d)/i);
+	if (episodeMatch) {
+		const [, season, episode] = episodeMatch;
+		if (season !== void 0 && episode !== void 0) return {
+			kind: "episode",
+			season: +season,
+			episode: +episode
+		};
+	}
+	const rangeMatch = title.match(/\bS(\d{1,2})[ ._]?-[ ._]?S?(\d{1,2})\b/i);
+	if (rangeMatch) {
+		const [, from, to] = rangeMatch;
+		if (from !== void 0 && to !== void 0) return {
+			kind: "season",
+			from: +from,
+			to: +to
+		};
+	}
+	const singleMatch = title.match(/\bS(\d{1,2})\b/i);
+	if (singleMatch) {
+		const [, season] = singleMatch;
+		if (season !== void 0) return {
+			kind: "season",
+			from: +season,
+			to: +season
+		};
+	}
+	if (/\bcomplete\b/i.test(title)) return { kind: "complete" };
+	return null;
+}
+//#endregion
+//#region src/farm.ts
+const GB$3 = 1024 ** 3;
+const HOUR = 36e5;
+const HEB_ROOKIE = {
+	name: "Heb Rookie",
+	days: 0,
+	volumeGB: 0,
+	ratio: 0,
+	torrents: 0,
+	demotedBelow: 0,
+	dailyLimit: 10
+};
+const HEB_USER = {
+	name: "Heb User",
+	days: 30,
+	volumeGB: 20,
+	ratio: 1.25,
+	torrents: 0,
+	demotedBelow: .8,
+	dailyLimit: 25
+};
+const RANKS = [
+	HEB_ROOKIE,
+	HEB_USER,
+	{
+		name: "Heb Lover",
+		days: 42,
+		volumeGB: 75,
+		ratio: 1.5,
+		torrents: 50,
+		demotedBelow: 1.45,
+		dailyLimit: 50
+	},
+	{
+		name: "Heb Veteran",
+		days: 84,
+		volumeGB: 250,
+		ratio: 2.05,
+		torrents: 100,
+		demotedBelow: 1.95,
+		dailyLimit: 50
+	},
+	{
+		name: "Heb Fanatic",
+		days: 112,
+		volumeGB: 500,
+		ratio: 2.5,
+		torrents: 150,
+		demotedBelow: 2.45,
+		dailyLimit: 65
+	},
+	{
+		name: "Heb Elite",
+		days: 364,
+		volumeGB: 1024,
+		ratio: 3,
+		torrents: 350,
+		demotedBelow: 2.95,
+		dailyLimit: 65
+	},
+	{
+		name: "Heb Supreme",
+		days: 574,
+		volumeGB: 2048,
+		ratio: 4,
+		torrents: 500,
+		demotedBelow: 3.95,
+		dailyLimit: 80
+	},
+	{
+		name: "Heb Prophet",
+		days: 910,
+		volumeGB: 3584,
+		ratio: 5,
+		torrents: 700,
+		demotedBelow: 4.95,
+		dailyLimit: 100
+	}
+];
+RANKS.map((r) => r.name);
+/** The default `farm.targetRank`: aim one rung above wherever the account actually is. */
+const AUTO_TARGET = "auto";
+const normaliseName = (name) => String(name ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+const BY_NAME = new Map(RANKS.map((r) => [normaliseName(r.name), r]));
+function rankByName(name) {
+	return BY_NAME.get(normaliseName(name));
+}
+/** The next rank up, or undefined for an unknown rank and for the top of the ladder. */
+function nextRankAfter(name) {
+	const i = RANKS.findIndex((r) => normaliseName(r.name) === normaliseName(name));
+	return i < 0 ? void 0 : RANKS[i + 1];
+}
+/** The ratio that costs an account the rank it currently holds. 0 when the rank is unknown,
+*  which is the fail-open direction: an unknown rank adds no floor of its own, and the
+*  volume-based floor in requiredRatioFor() still applies. */
+function demotionRatioFor(rank) {
+	return rankByName(rank)?.demotedBelow ?? 0;
+}
+/** Downloads per day at this rank, or undefined when the rank is unknown. */
+function dailyLimitFor(rank) {
+	return rankByName(rank)?.dailyLimit;
+}
+/** The allowance to assume when the rank is not known at all: the bottom of the ladder, which
+*  is the only value that cannot be an over-estimate. */
+const FALLBACK_DAILY_LIMIT = HEB_ROOKIE.dailyLimit;
+function resolveTargetRank(target, currentRank) {
+	const named = rankByName(target);
+	if (named) return named;
+	const next = nextRankAfter(currentRank);
+	if (next) return next;
+	return rankByName(currentRank) ?? HEB_USER;
+}
+const TARGET_VOLUME_HEADROOM = 1.1;
+function requiredRatioFor(downloaded) {
+	if (downloaded < 5 * GB$3) return 0;
+	if (downloaded < 10 * GB$3) return .5;
+	if (downloaded < 15 * GB$3) return .7;
+	return .8;
+}
+function pointsPerHour(sizeBytes, seeders, seedMonths = 0) {
+	return sizeBytes / GB$3 * (.2 + .4 * Math.log(1 + seedMonths)) / Math.log(2 + Math.max(0, seeders) ** .7);
+}
+const completeHashes = (torrents) => new Set((torrents ?? []).filter((t) => t.progress >= 1).map((t) => String(t.hash).toLowerCase()));
+function countCompleted(entries, torrents) {
+	const complete = completeHashes(torrents);
+	let count = 0;
+	for (const entry of Object.values(entries)) {
+		if (entry === void 0) continue;
+		if (entry.completedAt || entry.hash && complete.has(entry.hash.toLowerCase())) count++;
+	}
+	if (torrents === void 0 && count === 0) return void 0;
+	return {
+		count,
+		exact: false,
+		basis: torrents === void 0 ? "the local index only (qBittorrent unreadable)" : "qBittorrent plus the local index"
+	};
+}
+function newlyCompleted(entries, torrents) {
+	const complete = completeHashes(torrents);
+	const out = [];
+	for (const [id, entry] of Object.entries(entries)) {
+		if (entry === void 0 || entry.completedAt || !entry.hash) continue;
+		if (complete.has(entry.hash.toLowerCase())) out.push(id);
+	}
+	return out;
+}
+const PRESETS = {
+	"ratio-first": {
+		ratio: 1,
+		volume: 0,
+		count: 0
+	},
+	balanced: {
+		ratio: .5,
+		volume: .25,
+		count: .25
+	},
+	"volume-first": {
+		ratio: .25,
+		volume: .75,
+		count: 0
+	},
+	"count-first": {
+		ratio: .25,
+		volume: 0,
+		count: .75
+	}
+};
+Object.keys(PRESETS);
+function isPresetName(name) {
+	return name !== void 0 && Object.hasOwn(PRESETS, name);
+}
+/** Infinity for an account that has downloaded nothing: no download, no ratio problem. The
+*  tracker's own `ratio` field is not used, so this stays deterministic under test. */
+function ratioOf(uploaded, downloaded) {
+	if (!Number.isFinite(uploaded) || !Number.isFinite(downloaded)) return 0;
+	return downloaded > 0 ? uploaded / downloaded : Number.POSITIVE_INFINITY;
+}
+const fmtRatio = (r) => Number.isFinite(r) ? r.toFixed(2) : "∞";
+const fraction = (have, need) => need <= 0 ? Number.POSITIVE_INFINITY : have / need;
+function rankProgress(input) {
+	const { uploaded, downloaded, currentRank, completed } = input;
+	const target = resolveTargetRank(input.targetRank, currentRank);
+	const ratio = ratioOf(uploaded, downloaded);
+	const downloadedGB = downloaded / GB$3;
+	const needRatio = Number.isFinite(input.targetRatio) && (input.targetRatio ?? 0) > 0 ? input.targetRatio : target.ratio;
+	const dims = {
+		ratio: {
+			have: ratio,
+			need: needRatio,
+			met: ratio >= needRatio,
+			known: true
+		},
+		volumeGB: {
+			have: downloadedGB,
+			need: target.volumeGB,
+			met: downloadedGB >= target.volumeGB,
+			known: true
+		},
+		torrents: {
+			have: completed?.count ?? 0,
+			need: target.torrents,
+			met: (completed?.count ?? 0) >= target.torrents,
+			known: completed !== void 0
+		},
+		days: {
+			have: input.accountAgeDays ?? 0,
+			need: target.days,
+			met: (input.accountAgeDays ?? 0) >= target.days,
+			known: input.accountAgeDays !== void 0
+		}
+	};
+	const candidates = [{
+		name: "ratio",
+		at: fraction(ratio, needRatio)
+	}, {
+		name: "volume",
+		at: fraction(downloadedGB, target.volumeGB)
+	}];
+	if (dims.torrents.known && target.torrents > 0) candidates.push({
+		name: "torrents",
+		at: fraction(dims.torrents.have, target.torrents)
+	});
+	const worst = candidates.reduce((a, b) => b.at < a.at ? b : a);
+	const binding = worst.at >= 1 ? null : worst.name;
+	const floor = Math.max(requiredRatioFor(downloaded), demotionRatioFor(currentRank));
+	let preset;
+	if (ratio <= floor) preset = "ratio-first";
+	else if (binding === "ratio") preset = "ratio-first";
+	else if (binding === "volume") preset = "volume-first";
+	else if (binding === "torrents") preset = "count-first";
+	else preset = "balanced";
+	const parts = [`ratio ${fmtRatio(ratio)}/${needRatio}${dims.ratio.met ? " ✓" : ""}`, `volume ${downloadedGB.toFixed(1)}/${target.volumeGB} GB${dims.volumeGB.met ? " ✓" : ""}`];
+	if (target.torrents > 0) parts.push(dims.torrents.known ? `torrents ≥${dims.torrents.have}/${target.torrents}${dims.torrents.met ? " ✓" : ""}` : `torrents unknown/${target.torrents}`);
+	if (binding === null && target.days > 0) parts.push(`${target.days} days on site still required (not tracked here)`);
+	const progress = {
+		currentRank: currentRank ?? null,
+		targetRank: target.name,
+		ratio: dims.ratio,
+		volumeGB: dims.volumeGB,
+		torrents: dims.torrents,
+		days: dims.days,
+		binding,
+		preset,
+		summary: parts.join(", ")
+	};
+	if (input.targetRank !== void 0 && input.targetRank !== "auto" && !rankByName(input.targetRank)) progress.targetRankRequested = input.targetRank;
+	return progress;
+}
+const WANTED_CATEGORY_IDS = [1, 2];
+const GRAB_DEFAULTS = {
+	maxAgeHours: 6,
+	minSizeGB: 1,
+	maxSizeGB: 40,
+	maxCountedSizeGB: 15,
+	reserveGB: 40,
+	keepForUser: 3,
+	maxPerRun: 2,
+	maxPerHour: 2,
+	quietAfterHours: 1,
+	ratioMargin: .2,
+	/** A rank name from RANKS, or AUTO_TARGET for "one rung above where the account is". */
+	targetRank: AUTO_TARGET,
+	/** Unset: derived from targetRank (its volume requirement plus TARGET_VOLUME_HEADROOM).
+	*  Set: an operator pinning the number of counted GB worth chasing. */
+	countedTargetGB: void 0,
+	/** Unset: derived from targetRank. Set: an operator pinning the ratio GOAL. Either way it
+	*  is a goal and never blocks a grab - see the safety floor in pickGrabs. */
+	targetRatio: void 0,
+	/** Unset: whatever recommendPreset() says for the live stats. Set: a pinned preset. */
+	preset: void 0,
+	/** Per-dimension overrides, merged over the preset's weights. */
+	weights: void 0
+};
+const weightsTotal = (w) => w.ratio + w.volume + w.count;
+function resolveWeights(opts, progress) {
+	const pinned = opts?.preset;
+	const base = isPresetName(pinned) ? pinned : progress.preset;
+	const weights = { ...PRESETS[base] };
+	const over = opts?.weights;
+	if (over) {
+		if (Number.isFinite(over.ratio)) weights.ratio = over.ratio;
+		if (Number.isFinite(over.volume)) weights.volume = over.volume;
+		if (Number.isFinite(over.count)) weights.count = over.count;
+		if (!(weightsTotal(weights) > 0)) return {
+			preset: base,
+			weights: { ...PRESETS[base] }
+		};
+		return {
+			preset: "custom",
+			weights
+		};
+	}
+	return {
+		preset: base,
+		weights
+	};
+}
+function rawDimensions(it) {
+	const sizeGB = it.size / GB$3;
+	const countedGB = it.size * it.downloadFactor / GB$3;
+	return {
+		ratio: demand(it) / (1 + countedGB),
+		volume: countedGB,
+		count: 1 / (1 + sizeGB)
+	};
+}
+function normalise(values) {
+	let min = Number.POSITIVE_INFINITY;
+	let max = Number.NEGATIVE_INFINITY;
+	for (const raw of values) {
+		const v = Number.isFinite(raw) ? raw : 0;
+		if (v < min) min = v;
+		if (v > max) max = v;
+	}
+	const span = max - min;
+	if (!Number.isFinite(span) || span <= 0) return values.map(() => 0);
+	return values.map((raw) => ((Number.isFinite(raw) ? raw : 0) - min) / span);
+}
+function scoreCandidates(items, weights) {
+	const raw = items.map(rawDimensions);
+	const ratio = normalise(raw.map((r) => r.ratio));
+	const volume = normalise(raw.map((r) => r.volume));
+	const count = normalise(raw.map((r) => r.count));
+	const scores = /* @__PURE__ */ new Map();
+	items.forEach((it, i) => {
+		scores.set(it, weights.ratio * (ratio[i] ?? 0) + weights.volume * (volume[i] ?? 0) + weights.count * (count[i] ?? 0));
+	});
+	return scores;
+}
+function pickGrabs(items, ctx) {
+	if (!Number.isFinite(ctx.freeBytes)) return [];
+	const o = {
+		...GRAB_DEFAULTS,
+		...ctx.opts
+	};
+	const { stats } = ctx;
+	let slots = Math.min(o.maxPerRun, o.maxPerHour - (ctx.grabbedLastHour ?? 0), stats.dailyLimit - o.keepForUser - stats.dailyUsed);
+	if (slots <= 0) return [];
+	let free = ctx.freeBytes;
+	let downloaded = stats.downloaded;
+	const progress = rankProgress({
+		uploaded: stats.uploaded,
+		downloaded: stats.downloaded,
+		currentRank: stats.userClass,
+		targetRank: o.targetRank,
+		targetRatio: o.targetRatio,
+		completed: ctx.completed
+	});
+	const { weights } = resolveWeights(ctx.opts, progress);
+	const target = resolveTargetRank(o.targetRank, stats.userClass);
+	const demotionFloor = demotionRatioFor(stats.userClass) + o.ratioMargin;
+	const countedTargetBytes = (Number.isFinite(o.countedTargetGB) ? o.countedTargetGB : target.volumeGB * TARGET_VOLUME_HEADROOM) * GB$3;
+	const fresh = items.filter((it) => !ctx.known.has(String(it.id))).filter((it) => ctx.now - it.uploadedAt.getTime() <= o.maxAgeHours * HOUR).filter((it) => WANTED_CATEGORY_IDS.includes(it.categoryId)).filter((it) => it.size >= o.minSizeGB * GB$3 && it.size <= o.maxSizeGB * GB$3).filter((it) => !isDiscOrRemux(it.name)).filter((it) => ctx.now - it.uploadedAt.getTime() <= o.quietAfterHours * HOUR || leechers(it) > 0);
+	const scores = scoreCandidates(fresh, weights);
+	fresh.sort((a, b) => (scores.get(b) ?? 0) - (scores.get(a) ?? 0) || b.uploadedAt.getTime() - a.uploadedAt.getTime());
+	const picks = [];
+	for (const it of fresh) {
+		if (slots <= 0) break;
+		if (free - it.size < o.reserveGB * GB$3) continue;
+		const counted = it.size * it.downloadFactor;
+		let reason;
+		if (counted === 0) reason = it.uploadFactor > 1 ? `freeleech x${it.uploadFactor}` : "freeleech";
+		else {
+			const wantCounted = downloaded < countedTargetBytes;
+			const cheapish = it.downloadFactor <= .5 || it.uploadFactor >= 2;
+			const safe = stats.uploaded / (downloaded + counted) >= Math.max(requiredRatioFor(downloaded + counted) + o.ratioMargin, demotionFloor);
+			if (!(wantCounted && cheapish && it.size <= o.maxCountedSizeGB * GB$3 && safe)) continue;
+			reason = `counts ${(counted / GB$3).toFixed(1)} GB toward ${target.name}`;
+			downloaded += counted;
+		}
+		picks.push({
+			item: it,
+			reason
+		});
+		free -= it.size;
+		slots--;
+	}
+	return picks;
+}
+const leechers = (it) => Math.max(0, it.leechers ?? 0);
+const demand = (it) => (leechers(it) + 1) / ((it.seeders ?? 0) + 1) * (it.uploadFactor || 1);
+const CLEANUP_DEFAULTS = {
+	reserveGB: 40,
+	targetGB: 50,
+	minSeedDays: 8,
+	keepIfSeedersBelow: 5,
+	emergencyGB: 10,
+	minWatchAgeDays: 14,
+	watchCategory: "watch"
+};
+function pickRemovals(torrents, ctx) {
+	if (!Number.isFinite(ctx.freeBytes)) return [];
+	const o = {
+		...CLEANUP_DEFAULTS,
+		...ctx.opts
+	};
+	if (ctx.freeBytes >= o.reserveGB * GB$3) return [];
+	const emergency = ctx.freeBytes < o.emergencyGB * GB$3;
+	const nowSec = ctx.now / 1e3;
+	const eligible = torrents.filter((t) => ctx.managed.has(t.hash)).filter((t) => t.progress >= 1 && !/^(checking|moving|error|missing)/i.test(t.state)).filter((t) => (t.seeding_time ?? 0) >= o.minSeedDays * 86400).filter((t) => t.category !== o.watchCategory || nowSec - (t.completion_on || nowSec) >= o.minWatchAgeDays * 86400).filter((t) => emergency || (t.num_complete ?? 0) >= o.keepIfSeedersBelow).map((t) => {
+		const months = (t.seeding_time ?? 0) / 2592e3;
+		return {
+			t,
+			value: pointsPerHour(t.size, t.num_complete ?? 0, months) / (t.size / GB$3)
+		};
+	}).sort((a, b) => a.value - b.value);
+	const out = [];
+	let free = ctx.freeBytes;
+	for (const { t } of eligible) {
+		if (free >= o.targetGB * GB$3) break;
+		out.push(t);
+		free += t.size;
+	}
+	return out;
+}
+function stuckDownloads(torrents, { now, managed, hours = 24 }) {
+	const nowSec = now / 1e3;
+	return torrents.filter((t) => managed.has(t.hash) && t.progress < 1 && nowSec - (t.added_on || nowSec) >= hours * 3600);
+}
+function describe(it) {
+	const info = seasonInfo(it.name);
+	return `${it.name} (${(it.size / GB$3).toFixed(1)} GB${info ? `, ${info.kind}` : ""})`;
+}
+//#endregion
 //#region src/bencode.ts
 function toBuffer(v) {
 	return Buffer.isBuffer(v) ? v : Buffer.from(v.buffer, v.byteOffset, v.byteLength);
@@ -10976,7 +11462,7 @@ function buildTags({ hebitsId, imdb } = {}) {
 }
 //#endregion
 //#region src/grab.ts
-const GB$3 = 1024 ** 3;
+const GB$2 = 1024 ** 3;
 var UserError = class extends Error {};
 function makeGrabber({ cfg, store, hebits, qbit, log }) {
 	const locks = /* @__PURE__ */ new Map();
@@ -10993,7 +11479,7 @@ function makeGrabber({ cfg, store, hebits, qbit, log }) {
 			log(`hebits daily downloads: ${e.message}`);
 			return {
 				used: store.grabsToday(),
-				limit: store.limitToday(cfg)
+				limit: store.limitToday(cfg, dailyLimitFor(store.data.lastRank) ?? FALLBACK_DAILY_LIMIT)
 			};
 		}
 	}
@@ -11015,7 +11501,7 @@ function makeGrabber({ cfg, store, hebits, qbit, log }) {
 				if (d.used >= d.limit) throw new UserError("daily download limit reached");
 				const free = await qbit.freeSpace();
 				if (!Number.isFinite(free)) throw new UserError("qBittorrent did not report free disk space");
-				if (meta.size && meta.size > free - cfg.minFreeGB * GB$3) throw new UserError("not enough disk space");
+				if (meta.size && meta.size > free - cfg.minFreeGB * GB$2) throw new UserError("not enough disk space");
 				buf = await hebits.downloadTorrent(Number(hebitsId));
 				let parsed;
 				try {
@@ -11054,150 +11540,6 @@ function makeGrabber({ cfg, store, hebits, qbit, log }) {
 		daily,
 		withLock
 	};
-}
-//#endregion
-//#region src/parse.ts
-function isDiscOrRemux(title) {
-	return /remux/i.test(title) || /\bbdmv\b|\biso\b/i.test(title) || /complete[ ._-]*(uhd[ ._-]*)?blu-?ray/i.test(title) || /blu-?ray/i.test(title) && /\b(hevc|avc|vc-?1|mpeg-?2)\b/i.test(title) && !/x26[45]|h\.?26[45]/i.test(title);
-}
-function seasonInfo(title) {
-	const episodeMatch = title.match(/\bS(\d{1,2})[ ._-]?E(\d{1,3})(?!\d)/i);
-	if (episodeMatch) {
-		const [, season, episode] = episodeMatch;
-		if (season !== void 0 && episode !== void 0) return {
-			kind: "episode",
-			season: +season,
-			episode: +episode
-		};
-	}
-	const rangeMatch = title.match(/\bS(\d{1,2})[ ._]?-[ ._]?S?(\d{1,2})\b/i);
-	if (rangeMatch) {
-		const [, from, to] = rangeMatch;
-		if (from !== void 0 && to !== void 0) return {
-			kind: "season",
-			from: +from,
-			to: +to
-		};
-	}
-	const singleMatch = title.match(/\bS(\d{1,2})\b/i);
-	if (singleMatch) {
-		const [, season] = singleMatch;
-		if (season !== void 0) return {
-			kind: "season",
-			from: +season,
-			to: +season
-		};
-	}
-	if (/\bcomplete\b/i.test(title)) return { kind: "complete" };
-	return null;
-}
-//#endregion
-//#region src/farm.ts
-const GB$2 = 1024 ** 3;
-const HOUR = 36e5;
-function requiredRatioFor(downloaded) {
-	if (downloaded < 5 * GB$2) return 0;
-	if (downloaded < 10 * GB$2) return .5;
-	if (downloaded < 15 * GB$2) return .7;
-	return .8;
-}
-function pointsPerHour(sizeBytes, seeders, seedMonths = 0) {
-	return sizeBytes / GB$2 * (.2 + .4 * Math.log(1 + seedMonths)) / Math.log(2 + Math.max(0, seeders) ** .7);
-}
-const WANTED_CATEGORY_IDS = [1, 2];
-const GRAB_DEFAULTS = {
-	maxAgeHours: 6,
-	minSizeGB: 1,
-	maxSizeGB: 40,
-	maxCountedSizeGB: 15,
-	reserveGB: 40,
-	keepForUser: 3,
-	maxPerRun: 2,
-	maxPerHour: 2,
-	quietAfterHours: 1,
-	countedTargetGB: 22,
-	ratioMargin: .2,
-	targetRatio: 1.25
-};
-function pickGrabs(items, ctx) {
-	if (!Number.isFinite(ctx.freeBytes)) return [];
-	const o = {
-		...GRAB_DEFAULTS,
-		...ctx.opts
-	};
-	const { stats } = ctx;
-	let slots = Math.min(o.maxPerRun, o.maxPerHour - (ctx.grabbedLastHour ?? 0), stats.dailyLimit - o.keepForUser - stats.dailyUsed);
-	if (slots <= 0) return [];
-	let free = ctx.freeBytes;
-	let downloaded = stats.downloaded;
-	const fresh = items.filter((it) => !ctx.known.has(String(it.id))).filter((it) => ctx.now - it.uploadedAt.getTime() <= o.maxAgeHours * HOUR).filter((it) => WANTED_CATEGORY_IDS.includes(it.categoryId)).filter((it) => it.size >= o.minSizeGB * GB$2 && it.size <= o.maxSizeGB * GB$2).filter((it) => !isDiscOrRemux(it.name)).filter((it) => ctx.now - it.uploadedAt.getTime() <= o.quietAfterHours * HOUR || leechers(it) > 0).sort((a, b) => demand(b) - demand(a) || b.uploadedAt.getTime() - a.uploadedAt.getTime());
-	const picks = [];
-	for (const it of fresh) {
-		if (slots <= 0) break;
-		if (free - it.size < o.reserveGB * GB$2) continue;
-		const counted = it.size * it.downloadFactor;
-		let reason;
-		if (counted === 0) reason = it.uploadFactor > 1 ? `freeleech x${it.uploadFactor}` : "freeleech";
-		else {
-			const wantCounted = downloaded < o.countedTargetGB * GB$2;
-			const cheapish = it.downloadFactor <= .5 || it.uploadFactor >= 2;
-			const safe = stats.uploaded / (downloaded + counted) >= Math.max(requiredRatioFor(downloaded + counted) + o.ratioMargin, o.targetRatio);
-			if (!(wantCounted && cheapish && it.size <= o.maxCountedSizeGB * GB$2 && safe)) continue;
-			reason = `counts ${(counted / GB$2).toFixed(1)} GB toward Heb User`;
-			downloaded += counted;
-		}
-		picks.push({
-			item: it,
-			reason
-		});
-		free -= it.size;
-		slots--;
-	}
-	return picks;
-}
-const leechers = (it) => Math.max(0, it.leechers ?? 0);
-const demand = (it) => (leechers(it) + 1) / ((it.seeders ?? 0) + 1) * (it.uploadFactor || 1);
-const CLEANUP_DEFAULTS = {
-	reserveGB: 40,
-	targetGB: 50,
-	minSeedDays: 8,
-	keepIfSeedersBelow: 5,
-	emergencyGB: 10,
-	minWatchAgeDays: 14,
-	watchCategory: "watch"
-};
-function pickRemovals(torrents, ctx) {
-	if (!Number.isFinite(ctx.freeBytes)) return [];
-	const o = {
-		...CLEANUP_DEFAULTS,
-		...ctx.opts
-	};
-	if (ctx.freeBytes >= o.reserveGB * GB$2) return [];
-	const emergency = ctx.freeBytes < o.emergencyGB * GB$2;
-	const nowSec = ctx.now / 1e3;
-	const eligible = torrents.filter((t) => ctx.managed.has(t.hash)).filter((t) => t.progress >= 1 && !/^(checking|moving|error|missing)/i.test(t.state)).filter((t) => (t.seeding_time ?? 0) >= o.minSeedDays * 86400).filter((t) => t.category !== o.watchCategory || nowSec - (t.completion_on || nowSec) >= o.minWatchAgeDays * 86400).filter((t) => emergency || (t.num_complete ?? 0) >= o.keepIfSeedersBelow).map((t) => {
-		const months = (t.seeding_time ?? 0) / 2592e3;
-		return {
-			t,
-			value: pointsPerHour(t.size, t.num_complete ?? 0, months) / (t.size / GB$2)
-		};
-	}).sort((a, b) => a.value - b.value);
-	const out = [];
-	let free = ctx.freeBytes;
-	for (const { t } of eligible) {
-		if (free >= o.targetGB * GB$2) break;
-		out.push(t);
-		free += t.size;
-	}
-	return out;
-}
-function stuckDownloads(torrents, { now, managed, hours = 24 }) {
-	const nowSec = now / 1e3;
-	return torrents.filter((t) => managed.has(t.hash) && t.progress < 1 && nowSec - (t.added_on || nowSec) >= hours * 3600);
-}
-function describe(it) {
-	const info = seasonInfo(it.name);
-	return `${it.name} (${(it.size / GB$2).toFixed(1)} GB${info ? `, ${info.kind}` : ""})`;
 }
 //#endregion
 //#region src/jobs.ts
@@ -11257,26 +11599,46 @@ function makeJobs({ cfg, store, hebits, qbit, notifier, ensureTorrent, farmLog, 
 			const stats = await hebits.stats();
 			const daily = await hebits.dailyDownloads(stats.userId);
 			noteLogin(true);
+			if (stats.userClass) store.noteRank(stats.userClass);
 			const items = await hebits.browse({
 				orderBy: "time",
 				orderWay: "desc"
 			});
 			const freeBytes = await qbit.freeSpace();
 			if (!Number.isFinite(freeBytes)) throw new Error("qBittorrent returned a non-numeric free space value");
+			const all = await qbit.all().catch((e) => {
+				log(`farm: qBittorrent's torrent list could not be read (${e.message}) - the completed-torrent count is from the local index only`);
+			});
+			if (all) {
+				const at = (/* @__PURE__ */ new Date()).toISOString();
+				for (const id of newlyCompleted(store.data.torrents, all)) store.putTorrent(id, { completedAt: at });
+			}
+			const completed = countCompleted(store.data.torrents, all);
+			const progress = rankProgress({
+				uploaded: stats.uploaded,
+				downloaded: stats.downloaded,
+				currentRank: stats.userClass,
+				targetRank: cfg.farm?.targetRank,
+				targetRatio: cfg.farm?.targetRatio,
+				completed
+			});
 			const picks = pickGrabs(items, {
 				now: Date.now(),
 				stats: {
 					uploaded: stats.uploaded,
 					downloaded: stats.downloaded,
 					dailyUsed: daily.used,
-					dailyLimit: daily.limit
+					dailyLimit: daily.limit,
+					userClass: stats.userClass
 				},
 				freeBytes,
 				known: new Set(Object.keys(store.data.torrents)),
 				grabbedLastHour: (store.data.farmLog || []).filter((e) => e.action === "grab" && Date.now() - Date.parse(e.at) < 36e5).length,
+				completed,
 				opts: cfg.farm
 			});
 			log(`farm: ${items.length} latest, ${picks.length} to grab; daily ${daily.used}/${daily.limit}, free ${(freeBytes / GB$1).toFixed(0)} GB, up ${(stats.uploaded / GB$1).toFixed(2)} GB, down ${(stats.downloaded / GB$1).toFixed(2)} GB`);
+			log(`farm: toward ${progress.targetRank} - ${progress.summary}; preset ${resolveWeights(cfg.farm, progress).preset}`);
 			for (const { item, reason } of picks) try {
 				await ensureTorrent(String(item.id), {
 					imdb: item.imdb,
@@ -11309,6 +11671,8 @@ function makeJobs({ cfg, store, hebits, qbit, notifier, ensureTorrent, farmLog, 
 			const all = await qbit.all();
 			const freeBytes = await qbit.freeSpace();
 			if (!Number.isFinite(freeBytes)) throw new Error("qBittorrent returned a non-numeric free space value");
+			const completedAt = (/* @__PURE__ */ new Date()).toISOString();
+			for (const id of newlyCompleted(store.data.torrents, all)) store.putTorrent(id, { completedAt });
 			const removals = pickRemovals(all, {
 				now: Date.now(),
 				freeBytes,
@@ -11605,8 +11969,14 @@ var Store = class {
 			return false;
 		}
 	}
-	limitToday(cfg, now = /* @__PURE__ */ new Date()) {
-		return cfg.dailyLimitByDay?.[dayKey(now, this.timezone)] ?? cfg.dailyLimit;
+	limitToday(cfg, rankLimit = 0, now = /* @__PURE__ */ new Date()) {
+		return cfg.dailyLimitByDay?.[dayKey(now, this.timezone)] ?? (cfg.dailyLimit > 0 ? cfg.dailyLimit : rankLimit);
+	}
+	noteRank(rank, now = /* @__PURE__ */ new Date()) {
+		if (!rank || this.data.lastRank === rank) return;
+		this.data.lastRank = rank;
+		this.data.lastRankAt = now.toISOString();
+		this.save();
 	}
 	grabsToday(now = /* @__PURE__ */ new Date()) {
 		const today = dayKey(now, this.timezone);
@@ -11774,15 +12144,41 @@ app.get("/:token/status", async (c) => {
 	const d = await daily();
 	const st = await hebits.stats().catch(() => void 0);
 	const freeBytes = await qbit.freeSpace().catch(() => NaN);
+	const completed = countCompleted(store.data.torrents, await qbit.all().catch(() => void 0));
+	const progress = st && rankProgress({
+		uploaded: st.uploaded,
+		downloaded: st.downloaded,
+		currentRank: st.userClass,
+		targetRank: cfg.farm?.targetRank,
+		targetRatio: cfg.farm?.targetRatio,
+		completed
+	});
+	const inForce = progress && resolveWeights(cfg.farm, progress);
 	return json(c, 200, {
 		version: VERSION,
-		account: st && {
+		account: st && progress && inForce && {
 			class: st.userClass,
 			uploadedGB: +(st.uploaded / GB).toFixed(2),
 			downloadedGB: +(st.downloaded / GB).toFixed(2),
 			ratio: st.ratio,
 			requiredRatio: st.requiredRatio,
-			towardHebUser: `downloaded ${(st.downloaded / GB).toFixed(1)}/20 GB, ratio ${st.downloaded ? (st.uploaded / st.downloaded).toFixed(2) : "∞"}/1.25`
+			target: {
+				rank: progress.targetRank,
+				requested: progress.targetRankRequested,
+				binding: progress.binding,
+				preset: inForce.preset,
+				weights: inForce.weights,
+				summary: progress.summary,
+				ratio: progress.ratio,
+				volumeGB: progress.volumeGB,
+				torrents: {
+					atLeast: progress.torrents.have,
+					need: progress.torrents.need,
+					known: progress.torrents.known,
+					basis: completed?.basis
+				},
+				daysOnSite: progress.days
+			}
 		},
 		downloadsToday: `${d.used}/${d.limit}`,
 		health: {
