@@ -8426,7 +8426,7 @@ function zoneOffsetMs(at, timeZone) {
 		second: "2-digit"
 	});
 	const p = Object.fromEntries(fmt.formatToParts(at).map((x) => [x.type, x.value]));
-	return Date.UTC(Number(p["year"]), Number(p["month"]) - 1, Number(p["day"]), Number(p["hour"]) % 24, Number(p["minute"]), Number(p["second"])) - at.getTime();
+	return Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day), Number(p.hour) % 24, Number(p.minute), Number(p.second)) - at.getTime();
 }
 /** Two-pass offset resolution. A single sample at the naive-as-UTC instant is wrong near
 *  a DST transition, because the offset it reads is the one in force AT THAT INSTANT,
@@ -8758,18 +8758,14 @@ var Hebits = class {
 			group_results: 0
 		};
 		const terms = [options.imdb ?? options.query, options.season ? `S${String(options.season).padStart(2, "0")}` : void 0].filter(Boolean).join(" ");
-		if (terms) sp["searchstr"] = terms;
-		if (options.freeleechOnly) sp["freetorrent"] = 1;
-		if (options.orderBy) sp["order_by"] = options.orderBy;
-		if (options.orderWay) sp["order_way"] = options.orderWay;
+		if (terms) sp.searchstr = terms;
+		if (options.freeleechOnly) sp.freetorrent = 1;
+		if (options.orderBy) sp.order_by = options.orderBy;
+		if (options.orderWay) sp.order_way = options.orderWay;
 		for (const c of options.categories ?? []) sp[`filter_cat[${c}]`] = 1;
 		const raw = await this.#transport.json("ajax.php", sp);
 		const flat = flattenGroups(parseOrThrow(browseResponseSchema, raw, "ajax.php?action=browse").response.results);
 		return options.limit === void 0 ? flat : flat.slice(0, options.limit);
-	}
-	/** The same endpoint as browse; separate because the call sites read differently. */
-	search(options) {
-		return this.browse(options);
 	}
 	/** Hebits serves an HTML page when it refuses a download, so validate before returning. */
 	async downloadTorrent(id) {
