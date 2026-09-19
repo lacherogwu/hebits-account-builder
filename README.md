@@ -355,6 +355,26 @@ answering happily:
 curl -s "http://127.0.0.1:7001/<token>/status" | grep -o '"version":"[^"]*"'
 ```
 
+## Using it only for maintenance, not for grabbing
+
+If you already download what you want some other way and only need the seeding side handled,
+set `"farm": { "enabled": false }` and leave `cleanup` on. The grab job stops; **adoption and
+the release pass run on their own timers and are unaffected**. What you get is a service with
+one job: keep torrents seeding until they have met the tracker's requirement with a margin,
+then remove them — worst value per GB first — and only once free space actually runs low.
+
+It works on torrents this service never added. Adoption takes over anything in qBittorrent
+that carries a `hebits:<id>` tag and announces to `trackerHost` (see
+[Adoption](#adoption)), so torrents added by hand, or by any other tool writing the same
+[tags](#tags), become releasable with no integration between the two. Titles in
+`watchCategory` are held longer than the rest, on the assumption that you downloaded those to
+watch rather than to seed — so something you just finished watching is not the first thing to
+go.
+
+Read [Account-building policy](#account-building-policy) for the thresholds before pointing
+this at a live account: "met the requirement" is `CLEANUP_DEFAULTS` in `src/farm.ts`, not the
+tracker's own rules, and you are responsible for keeping the two in agreement.
+
 ## Related
 
 Independent projects, listed only because they may be useful — this service requires none of
@@ -363,6 +383,8 @@ them and does not talk to them:
 - [`hebits-client`](https://www.npmjs.com/package/hebits-client) — the Hebits API client this
   service is built on. Useful on its own.
 - [`hebits-stremio-addon`](https://github.com/lacherogwu/hebits-stremio-addon) — a separate
-  Stremio-protocol addon that streams from the same tracker through your own qBittorrent. If
-  you run both against one qBittorrent, they will recognize each other's torrents through the
+  Stremio-protocol addon that streams from the same tracker through your own qBittorrent. It
+  never removes a torrent, so this service pairs well with it as the release side — see
+  [Using it only for maintenance](#using-it-only-for-maintenance-not-for-grabbing). If you run
+  both against one qBittorrent, they recognize each other's torrents through the
   [tags](#tags) above, but neither needs the other to be installed or running.
