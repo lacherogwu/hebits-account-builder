@@ -134,14 +134,16 @@ test('a notifier with neither a webhook nor a command is disabled', async () => 
 
 test('a failing transport does not record the send, so the next attempt retries', async () => {
   const state: Record<string, number> = {};
+  let fetchCalls = 0;
   const n = new Notifier(
     { webhookUrl: 'http://hook' },
     state,
     () => {},
     () => {},
-    { fetch: async () => ({ ok: false, status: 500 }) as Response },
+    { fetch: async () => { fetchCalls++; return { ok: false, status: 500 } as Response; } },
   );
   expect(await n.send('k', 'T', 'M')).toBe(false);
+  expect(fetchCalls).toBe(1);
   expect(state).toEqual({});
 });
 
@@ -168,14 +170,16 @@ test('both transports fire when both are configured', async () => {
 
 test('a failing command does not record the send, so the next attempt retries', async () => {
   const state: Record<string, number> = {};
+  let execFileCalls = 0;
   const n = new Notifier(
     { command: ['/bin/echo', '{{title}}'] },
     state,
     () => {},
     () => {},
-    { execFile: async () => { throw new Error('boom'); } },
+    { execFile: async () => { execFileCalls++; throw new Error('boom'); } },
   );
   expect(await n.send('k', 'T', 'M')).toBe(false);
+  expect(execFileCalls).toBe(1);
   expect(state).toEqual({});
 });
 
