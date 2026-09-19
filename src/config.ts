@@ -81,15 +81,15 @@ const DEFAULTS: Omit<Config, 'token' | 'configIssues'> = {
   notify: { webhookUrl: '' },
   lowDiskAlertGB: 15,
   torrentDir: join(CONFIG_DIR, 'torrents'),
-  // Also what deploy/org.user.hebits-builder.plist points StandardOutPath/StandardErrorPath
-  // at, which is what makes rotateLog() in server.ts rotate the log that actually exists.
-  // The plist holds the machine-specific spelling of this path; this default stays portable.
+  // Also where the supervisor must send stdout/stderr, which is what makes rotateLog() in
+  // server.ts rotate the log that actually exists. The supervisor's config holds the
+  // machine-specific spelling of this path; this default stays portable.
   logFile: join(CONFIG_DIR, 'builder.log'),
 };
 
 // --- config.json validation -------------------------------------------------------------
 // config.json is hand-edited. A typo (e.g. "minFreeGB": "20") must not stop the service
-// starting: launchd restarts it with KeepAlive, so a throwing loadConfig() becomes a
+// starting: a supervisor restarts it on exit, so a throwing loadConfig() becomes a
 // restart loop, and because the process dies before the notifier initialises the owner
 // gets no alert - it's simply, silently down. That's worse than running with one wrong
 // threshold. So every field is validated on its own: a bad one falls back to its default
@@ -335,7 +335,7 @@ export function loadConfig(): Config {
   let justRecovered = false;
   // A hand-edited config.json that fails to parse (trailing comma, truncated write, ...)
   // must not throw here: this runs at module load, before the notifier exists, so an
-  // uncaught throw becomes a silent launchd restart loop - see the block comment above
+  // uncaught throw becomes a silent supervisor restart loop - see the block comment above
   // validateScalar() for why every other field gets the same treatment. But treating the
   // parse failure as plain "no saved config" is worse than the throw it replaces: the token
   // block just below would then overwrite config.json with nothing but a fresh token,
@@ -366,7 +366,7 @@ export function loadConfig(): Config {
         // in this function until now caught only a parse FAILURE. `null`, a number, a string
         // and `true` all parse cleanly and then throw a TypeError on the very next statement
         // (`saved.token`), and would throw again at `key in saved` and `'farm' in saved` -
-        // the `in` operator rejects primitives. That is the same silent KeepAlive restart
+        // the `in` operator rejects primitives. That is the same silent supervisor restart
         // loop as an unguarded parse, through a different door.
         //
         // An array is worse precisely because it does NOT throw: JSON.stringify drops a

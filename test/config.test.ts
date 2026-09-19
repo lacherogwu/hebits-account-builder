@@ -107,8 +107,8 @@ test('multiple bad fields are all collected in configIssues', async () => {
 
 // --- loadConfig() must never throw --------------------------------------------------------
 // Everything below pins the same property from a different direction: loadConfig() runs at
-// module load under a KeepAlive LaunchAgent, before the Notifier exists, so an uncaught throw
-// here is not a crash the owner hears about - it is a silent 10-second restart loop with no
+// module load under a supervisor that restarts on exit, before the Notifier exists, so an
+// uncaught throw here is not a crash the owner hears about - it is a silent restart loop with no
 // alert, because the process dies before anything that could send one exists.
 //
 // Each test asserts the POST-STATE, not merely that a guard fired. The guard is the easy half:
@@ -342,8 +342,8 @@ test('an unwritable config dir with no config.json runs from an in-memory token'
   expect(cfg?.configIssues.some((m) => m.includes('could not be written'))).toBe(true);
 });
 
-// deploy/config.example.json's own torrentDir has crashed a service of this shape into a
-// launchd restart loop before (an unguarded mkdirSync threw for a path macOS can't create).
+// config.example.json's own torrentDir has crashed a service of this shape into a supervisor
+// restart loop before (an unguarded mkdirSync threw for a path macOS can't create).
 test('an uncreatable torrentDir falls back to the default and is recorded in configIssues', async () => {
   const blocker = join(dir, 'blocker'); // a file, not a directory
   writeFileSync(blocker, 'not a directory');

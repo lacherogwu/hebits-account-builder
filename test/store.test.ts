@@ -58,7 +58,7 @@ test('save never throws even without a logger, and a disk-full-shaped error is r
 
 // --- a corrupt state.json must not throw at construction ----------------------------------
 // The Store is built in server.ts one line after loadConfig() and before the Notifier exists,
-// so an uncaught throw here is the same silent launchd restart loop config.ts guards against.
+// so an uncaught throw here is the same silent supervisor restart loop config.ts guards against.
 // It must also not be silently clobbered by the next save(): the grab ledger, the managed
 // torrent index and the recent-activity log are the owner's only record of what this service
 // has done, so a broken file is moved aside intact.

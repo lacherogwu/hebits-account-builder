@@ -2,11 +2,11 @@
 // target runs it: one file, alone, with no package.json and no node_modules anywhere above
 // it. src/version.ts derives VERSION from ../package.json, which tsdown inlines at build
 // time - a property no test that imports src/ can see, because in the repo that import
-// resolves either way. On the target it would not: the deployed tree holds dist/server.mjs
-// and nothing else, so a build that stopped inlining dies with ERR_MODULE_NOT_FOUND under
-// KeepAlive, i.e. a silent 10-second restart loop. Hence the copy into a temp dir - Node
-// resolves a bare specifier from the FILE's location, so spawning out of the repo would
-// quietly supply everything the target lacks.
+// resolves either way. Where it runs it would not: the installed tree holds dist/server.mjs
+// and nothing else, so a build that stopped inlining dies with ERR_MODULE_NOT_FOUND, i.e. a
+// silent restart loop under a supervisor that restarts on exit. Hence the copy into a temp
+// dir - Node resolves a bare specifier from the FILE's location, so spawning out of the repo
+// would quietly supply everything the real install lacks.
 //
 // The second block below is the end-to-end form of the same rule: config.ts and store.ts both
 // run at module load, and their recovery paths can only be proved to keep the process alive by
@@ -207,7 +207,7 @@ describe('the built bundle (dist/server.mjs)', () => {
 });
 
 // loadConfig() and new Store() both run at module load, before the Notifier exists, under a
-// LaunchAgent with KeepAlive and ThrottleInterval 10. Every unit test for their recovery paths
+// supervisor that restarts on exit. Every unit test for their recovery paths
 // asserts "does not throw"; only a spawned process proves that what they leave behind is a
 // service that answers. This block hands the bundle both files broken at once, which is also
 // the one arrangement that catches an ordering trap the unit tests cannot see: server.ts passes

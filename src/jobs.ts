@@ -272,8 +272,8 @@ export function makeJobs({ cfg, store, hebits, qbit, notifier, ensureTorrent, fa
   // exist at all and why it is strict.
   //
   // WHERE IT RUNS, and why not at startup. The obvious place is once at boot, and that is the
-  // one place it must not be: this service runs under launchd with KeepAlive, so anything that
-  // throws before the Notifier exists is a silent ten-second restart loop - the exact failure
+  // one place it must not be: this service runs under a supervisor that restarts it on exit,
+  // so anything that throws before the Notifier exists is a silent restart loop - the failure
   // the config and store hardening exists to prevent - and the single thing adoption depends
   // on is a local qBittorrent, which is down for minutes at a time on a machine that has just
   // rebooted. A one-shot at boot would then either take the process with it or, guarded, run

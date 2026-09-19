@@ -6,6 +6,5 @@ CLAUDE.local.md
 config.json
 state.json
 cookie.txt
-.deploy-host
 *.torrent
 .superpowers/

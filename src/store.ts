@@ -77,7 +77,7 @@ export class Store {
   // failed save must never crash the process. It logs loudly instead and returns false.
   // The load side has to honour that same rule: this constructor runs at module load in
   // server.ts, one line after loadConfig() and before the Notifier exists, so an uncaught
-  // throw here is the identical silent launchd restart loop that config.ts's loadConfig()
+  // throw here is the identical silent supervisor restart loop that config.ts's loadConfig()
   // guards against. A corrupt state.json is moved aside rather than left to be silently
   // overwritten by the next save() - the documented fallback ({ grabs: [], torrents: {} })
   // is safe to run with (the fallback download count resets to zero and the torrent index

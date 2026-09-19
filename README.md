@@ -39,7 +39,7 @@ as failing.
 
 Settings live in `~/.config/hebits-account-builder/config.json` (mode `600`), overriding the
 defaults in `src/config.ts`. Override the directory itself with the `HEBITS_BUILDER_DIR`
-environment variable. See `deploy/config.example.json` for a starting point.
+environment variable. See `config.example.json` for a starting point.
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -60,7 +60,7 @@ environment variable. See `deploy/config.example.json` for a starting point.
 | `notify` | `{"webhookUrl": ""}` | Alert transport; see [Notifications](#notifications) |
 | `lowDiskAlertGB` | `15` | Alert threshold after a release pass still leaves the disk full |
 | `torrentDir` | `<config dir>/torrents` | Where downloaded `.torrent` files are cached |
-| `logFile` | `<config dir>/builder.log` | The log the service writes. It logs to stdout, so this must be the same path the LaunchAgent points `StandardOutPath`/`StandardErrorPath` at (`deploy/org.user.hebits-builder.plist` already does); it's truncated in place, with a `.1` backup, once it passes 20 MB |
+| `logFile` | `<config dir>/builder.log` | The log the service writes. It logs to stdout, so whatever supervises the service must redirect stdout and stderr to this same path — see [Running it as a service](#running-it-as-a-service); it's truncated in place, with a `.1` backup, once it passes 20 MB |
 
 The Hebits login cookie itself is not a `config.json` key — it lives in `cookie.txt` next to
 `config.json`, written by `/cookie` once a paste passes verification.
@@ -145,8 +145,9 @@ recognised, so a converged machine makes no tracker calls and writes nothing. An
 torrents *present* in qBittorrent are ever considered, an entry the release job marked
 `removedAt` can never come back.
 
-It runs as a tick rather than once at startup on purpose. The service runs under launchd with
-`KeepAlive`, so anything that throws before the notifier exists is a silent restart loop, and
+It runs as a tick rather than once at startup on purpose. The service is meant to run under a
+supervisor that restarts it on exit, so anything that throws before the notifier exists is a
+silent restart loop, and
 the one thing adoption depends on is a local qBittorrent — which on a machine that just
 rebooted is down for a minute or two. A tick converges instead of getting a single chance.
 
@@ -284,7 +285,7 @@ module (see [Tests](#tests)).
 Four runtime dependencies: [`hebits-client`](https://github.com/lacherogwu/hebits-client),
 which talks to Hebits' JSON API; [`hono`](https://hono.dev/) and `@hono/node-server` for the
 HTTP layer; and [`zod`](https://zod.dev/) to validate `config.json`. All four are bundled into
-`dist/server.mjs` at build time, so the target installs nothing. Everything else (`typescript`,
+`dist/server.mjs` at build time, so the machine that runs it installs nothing. Everything else (`typescript`,
 `tsdown`, `vitest`, `biome`, `@types/node`) is a dev dependency needed only to build and test.
 
 ## Tests
@@ -300,25 +301,40 @@ routes happen to be exercised.
 
 `test/bundle.test.ts` is the exception to "`test/` mirrors `src/`": it builds, then runs
 `dist/server.mjs` as a lone file in an empty directory with no `package.json` and no
-`node_modules` — the deployment condition. That is the only place a build that stopped inlining
+`node_modules` — the shipping condition. That is the only place a build that stopped inlining
 `package.json` (which `src/version.ts` imports for `VERSION`) would show up, and the only place
 that proves a corrupt `config.json` or `state.json` leaves a service that still answers rather
-than a launchd restart loop.
+than a restart loop.
 
-## Deploy
+## Running it as a service
+
+`npm run build` produces one self-contained file, `dist/server.mjs`. Copy it wherever you keep
+it and start it under whatever supervisor you already use — launchd, systemd, pm2, a
+container. The machine that runs it needs a Node ≥ 22 binary and nothing else: no
+`node_modules`, no `npm install`, no registry access.
+
+This repo ships no deployment tooling on purpose. The host, the install path and the service
+manager are facts about your machine, not about this service.
+
+Three things a supervisor has to get right:
+
+- **Send stdout and stderr to `logFile`.** The service logs with `console.log`, so whatever the
+  supervisor does with stdout *is* the log, while rotation truncates `logFile`. Let those two
+  disagree and the rotator faithfully truncates a file nothing writes while the real log grows
+  without limit. Truncation is deliberate — it is the only method that works while the
+  supervisor holds the descriptor open, so don't replace it with a rename.
+- **Set `HEBITS_BUILDER_DIR` in the supervisor's own environment**, if you set it at all. A
+  supervised service does not inherit your shell, so a shell profile has no effect on it. It
+  also moves the default `logFile`, so it runs into the point above as well.
+- **Restart-on-exit is safe, and worth turning on.** Nothing on the startup path throws: a
+  `config.json` or `state.json` that will not parse is moved aside and the service starts on
+  defaults, so a restart policy cannot turn one typo into a restart loop that never alerts
+  anybody.
+
+After an upgrade, confirm the version now answering is the build you just installed rather
+than assuming the restart took — a supervisor that failed to restart leaves the old process
+answering happily:
 
 ```bash
-npm run deploy
+curl -s "http://127.0.0.1:7001/<token>/status" | grep -o '"version":"[^"]*"'
 ```
-
-`scripts/deploy.sh` runs `npm run typecheck` and `npm test`, builds with `npm run build`, and
-copies the single resulting `dist/server.mjs` to the target machine. The target needs a Node
-≥ 22 binary to run it and nothing else — no `node_modules`, no `npm install`, no registry
-access.
-
-The LaunchAgent itself is installed once, by hand: copy `deploy/org.user.hebits-builder.plist`
-to `~/Library/LaunchAgents/`, replace `__HOME__` with the target's home directory, and
-`launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/org.user.hebits-builder.plist`. Its
-`StandardOutPath` must stay equal to `logFile` — the service logs to stdout, so if the two
-disagree the rotator truncates a file nothing writes while the real log grows without limit.
-`deploy.sh` checks for that and warns, but does not fix it, since it never touches the plist.

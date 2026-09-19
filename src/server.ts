@@ -21,7 +21,7 @@ import { VERSION } from './version';
 // Declared before anything that is handed it as a callback: `const` is in its temporal dead
 // zone until this line runs, and Store's constructor calls its logger synchronously when
 // state.json is corrupt. With `log` below, that call would be a ReferenceError at module
-// load - the silent KeepAlive restart loop the store's own recovery exists to prevent.
+// load - the silent restart loop the store's own recovery exists to prevent.
 const log = (...a: unknown[]): void => console.log(new Date().toISOString(), ...a);
 const GB = 1024 ** 3;
 
@@ -268,18 +268,17 @@ app.onError((err, c) => {
   return c.text((err as Error).message, err instanceof UserError ? 409 : 500, { 'Content-Type': 'text/plain; charset=utf-8' });
 });
 
-// LOG_FILE is where the LaunchAgent points StandardOutPath/StandardErrorPath (see
-// deploy/org.user.hebits-builder.plist), which is what `log` above actually writes to - it
-// is console.log, so every line goes to stdout and launchd appends it there. That pairing is
-// the whole point: rotating cfg.logFile while the process logged somewhere else meant this
-// function faithfully rotated an empty file for as long as it existed while the real log
-// grew without limit.
+// LOG_FILE is where whatever supervises this process must send stdout and stderr, because
+// that is what `log` above actually writes to - it is console.log, so every line goes to
+// stdout and the supervisor appends it there. That pairing is the whole point: rotating
+// cfg.logFile while the process logged somewhere else meant this function faithfully rotated
+// an empty file for as long as it existed while the real log grew without limit.
 //
-// DO NOT turn this into a rename. launchd opened that file once, in append mode, and holds
-// the fd for the life of the process: truncating in place moves its write offset back to
-// zero and logging continues into the same file, but renaming it leaves launchd writing to
-// an unlinked inode - the log appears to stop dead until the next restart, and `.1` grows
-// instead. copyFileSync + truncateSync is the only shape that works here.
+// DO NOT turn this into a rename. The supervisor opened that file once, in append mode, and
+// holds the fd for the life of the process: truncating in place moves its write offset back
+// to zero and logging continues into the same file, but renaming it leaves the supervisor
+// writing to an unlinked inode - the log appears to stop dead until the next restart, and
+// `.1` grows instead. copyFileSync + truncateSync is the only shape that works here.
 function rotateLog(): void {
   try {
     if (statSync(LOG_FILE).size < 20 * 1024 * 1024) return;
