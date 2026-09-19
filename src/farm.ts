@@ -143,8 +143,8 @@ export interface CleanupContext {
   opts?: CleanupOptions;
 }
 
-// torrents: qBittorrent info objects; managed: Map<hash, {category}> of torrents the
-// addon knows about. Returns the torrents to delete (with files), cheapest first.
+// torrents: qBittorrent info objects; managed: Set<hash> of the torrents the addon knows
+// about. Returns the torrents to delete (with files), cheapest first.
 export function pickRemovals<T extends QbitTorrent>(torrents: T[], ctx: CleanupContext): T[] {
   // Fail closed: this pass deletes files, so an unreadable free-space reading must never
   // be treated as "plenty of room" (undefined/NaN compare false against every "not enough"

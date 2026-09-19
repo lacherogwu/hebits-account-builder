@@ -207,6 +207,9 @@ test('the minWatchAgeDays guard follows a configured watchCategory, not the hard
 
 test('H1: a numeric id matches a string key in `known`', () => {
   const it = torrent({ id: 12345, uploadedAt: new Date(now - HOUR) });
+  // Control first: with `known` empty this torrent IS grabbed, so the empty result below is
+  // attributable to `known` and not to some other filter quietly rejecting the fixture.
+  expect(pickGrabs([it], ctx()).map((p) => p.item.id)).toEqual([12345]);
   // `known` holds Object.keys(...) — strings. Without String(it.id) this torrent looks new
   // and the builder re-grabs what it already has, every run.
   const picks = pickGrabs([it], ctx({ known: new Set(['12345']) }));
@@ -214,8 +217,10 @@ test('H1: a numeric id matches a string key in `known`', () => {
 });
 
 test('H2: uploadedAt is a Date, and age filtering uses its epoch value', () => {
-  const young = torrent({ uploadedAt: new Date(now - 2 * HOUR) });
-  const old = torrent({ uploadedAt: new Date(now - 8 * HOUR) });
+  // `leechers` is explicit: at 2 h these are past quietAfterHours, so clearing that filter is
+  // a precondition of this test rather than an accident of the factory's defaults.
+  const young = torrent({ uploadedAt: new Date(now - 2 * HOUR), leechers: 2 });
+  const old = torrent({ uploadedAt: new Date(now - 8 * HOUR), leechers: 2 });
   // maxAgeHours is 6. The hazard is the unit, not the syntax: ctx.now is epoch ms while the
   // qBittorrent timestamps elsewhere in farm.ts are seconds, and getting it wrong admits every
   // stale release or drops every candidate. Asserting only that `old` is absent would pass

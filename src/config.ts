@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import type { CleanupOptions, GrabOptions } from './farm';
 
 const HOME = homedir();
 export const CONFIG_DIR = process.env.HEBITS_BUILDER_DIR || join(HOME, '.config', 'hebits-account-builder');
@@ -27,9 +28,10 @@ export interface Config {
   watchPath: string;
   seedCategory: string;
   seedPath: string;
-  // Account building (see lib/farm.js for the knobs and their defaults).
-  farm: { enabled: boolean; intervalMin: number };
-  cleanup: { enabled: boolean; intervalMin: number };
+  // Account building. Both are passed to the policy whole as `opts`, so the whole knob set
+  // (see GRAB_DEFAULTS / CLEANUP_DEFAULTS in farm.ts) is settable here alongside the schedule.
+  farm: GrabOptions;
+  cleanup: CleanupOptions;
   // Home Assistant webhook, e.g. http://homeassistant.local:8123/api/webhook/<id>
   notify: { webhookUrl: string };
   lowDiskAlertGB: number;
