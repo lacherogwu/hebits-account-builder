@@ -298,4 +298,19 @@ setTimeout(farmTick, 60_000);
 setInterval(farmTick, (cfg.farm?.intervalMin ?? 10) * 60_000);
 setTimeout(cleanupTick, 90_000);
 setInterval(cleanupTick, (cfg.cleanup?.intervalMin ?? 30) * 60_000);
-serve({ fetch: app.fetch, hostname: '0.0.0.0', port: cfg.port }, () => log(`hebits account builder v${VERSION} listening on :${cfg.port}`));
+const server = serve({ fetch: app.fetch, hostname: '0.0.0.0', port: cfg.port }, () =>
+  log(`hebits account builder v${VERSION} listening on :${cfg.port}`),
+);
+
+// A port collision is the one startup failure this process cannot fix by itself, and picking
+// a free port instead would move /status and /cookie out from under the URLs the operator
+// has. So it exits - but it names the port and the fix, because under a supervisor that
+// restarts on exit this becomes a loop, and a loop whose log is a stack trace tells nobody
+// anything. This is the same shape as the addon's; it had no handler at all before.
+server.on('error', (err: NodeJS.ErrnoException) => {
+  if (err.code === 'EADDRINUSE') {
+    log(`port ${cfg.port} is already in use. Set a different "port" in config.json and start again.`);
+    process.exit(1);
+  }
+  throw err;
+});

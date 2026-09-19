@@ -139,7 +139,7 @@ test('multiple bad fields are all collected in configIssues', async () => {
   const cfg = loadConfig();
   expect(cfg.configIssues.length).toBeGreaterThanOrEqual(3);
   expect(cfg.minFreeGB).toBe(20);
-  expect(cfg.port).toBe(7001);
+  expect(cfg.port).toBe(18701);
   expect(cfg.notify).toEqual({ webhookUrl: '' });
 });
 
@@ -616,4 +616,15 @@ test('an aggressive rateLimit is honoured, and says so in configIssues', async (
 test('the default rate does not warn', async () => {
   const { loadConfig } = await import('../src/config');
   expect(loadConfig().configIssues).toEqual([]);
+});
+
+// The default port is a decision, not an accident: below the range the OS hands out for
+// outbound connections (49152+ on macOS/Windows, 32768+ on Linux) so it cannot lose a bind
+// race, and clear of the round ports common services claim. It is pinned here so it cannot
+// drift away from what the README tells an operator to expect.
+test('the default port is 18701', async () => {
+  const { loadConfig } = await import('../src/config');
+  const port = loadConfig().port;
+  expect(port).toBe(18701);
+  expect(port).toBeLessThan(32768); // below every common ephemeral range
 });

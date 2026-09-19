@@ -10549,7 +10549,7 @@ const HOME = homedir();
 const CONFIG_DIR = process.env.HEBITS_BUILDER_DIR || join(HOME, ".config", "hebits-account-builder");
 const CONFIG_FILE = join(CONFIG_DIR, "config.json");
 const DEFAULTS = {
-	port: 7001,
+	port: 18701,
 	lanHost: "",
 	dailyLimit: 0,
 	dailyLimitByDay: {},
@@ -12390,7 +12390,13 @@ serve({
 	fetch: app.fetch,
 	hostname: "0.0.0.0",
 	port: cfg.port
-}, () => log(`hebits account builder v${VERSION} listening on :${cfg.port}`));
+}, () => log(`hebits account builder v${VERSION} listening on :${cfg.port}`)).on("error", (err) => {
+	if (err.code === "EADDRINUSE") {
+		log(`port ${cfg.port} is already in use. Set a different "port" in config.json and start again.`);
+		process.exit(1);
+	}
+	throw err;
+});
 //#endregion
 export {};
 

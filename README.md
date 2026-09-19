@@ -44,7 +44,7 @@ environment variable. See `config.example.json` for a starting point.
 | Key | Default | Meaning |
 |---|---|---|
 | `token` | random, generated on first run | Secret path segment every route sits behind |
-| `port` | `7001` | Listen port, all interfaces |
+| `port` | `18701` | Listen port, all interfaces. Chosen to sit below the range the OS hands out for outbound connections (49152+ on macOS/Windows, 32768+ on Linux), so it cannot lose a bind race, and clear of the round ports common services claim |
 | `lanHost` | empty (auto-detected) | LAN address used in links such as the cookie-update alert; set it if auto-detection picks the wrong interface |
 | `dailyLimit` | `0` | Fallback only; the real counter is read from Hebits through `hebits-client`. `0` means "take the allowance of the rank the account currently holds" (see the ladder below); a non-zero value pins it |
 | `dailyLimitByDay` | `{}` | Per-day overrides, e.g. `{"2026-09-17": 5}` for a new account's first day |
@@ -353,7 +353,7 @@ than assuming the restart took — a supervisor that failed to restart leaves th
 answering happily:
 
 ```bash
-curl -s "http://127.0.0.1:7001/<token>/status" | grep -o '"version":"[^"]*"'
+curl -s "http://127.0.0.1:18701/<token>/status" | grep -o '"version":"[^"]*"'
 ```
 
 ## Using it only for maintenance, not for grabbing

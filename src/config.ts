@@ -75,7 +75,7 @@ export interface Config {
 }
 
 const DEFAULTS: Omit<Config, 'token' | 'configIssues'> = {
-  port: 7001,
+  port: 18701,
   lanHost: '',
   dailyLimit: 0, // 0 = derive from the current rank; see Config.dailyLimit
   dailyLimitByDay: {},
