@@ -166,7 +166,7 @@ app.get('/:token/status', async (c) => {
       towardHebUser: `downloaded ${(st.downloaded / GB).toFixed(1)}/20 GB, ratio ${st.downloaded ? (st.uploaded / st.downloaded).toFixed(2) : '∞'}/1.25`,
     },
     downloadsToday: `${d.used}/${d.limit}`,
-    health: { ...health, logFile: LOG_FILE },
+    health: { ...health, logFile: LOG_FILE, configIssues: cfg.configIssues },
     recentActivity: (store.data.farmLog || []).slice(-20).reverse(),
     freeGB: Math.round(((await qbit.freeSpace()) || 0) / GB),
     torrents: Object.entries(store.data.torrents)
