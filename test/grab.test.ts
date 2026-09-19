@@ -87,16 +87,49 @@ test('the daily limit is refused before a download is spent', async () => {
 
 test('withLock serialises by key and a rejection does not leak', async () => {
   const { withLock } = deps();
-  const order: string[] = [];
-  const bad = withLock('k', async () => {
-    order.push('a');
-    throw new Error('boom');
-  });
-  const good = withLock('k', async () => {
-    order.push('b');
-    return 'ok';
-  });
-  await expect(bad).rejects.toThrow('boom');
-  await expect(good).resolves.toBe('ok');
-  expect(order).toEqual(['a', 'b']);
+  // The historical bug (storing `run.finally(...)` - a different promise from the one
+  // returned - as the map's bookkeeping entry) let that entry's rejection go unobserved,
+  // which is exactly what crashed the service in production. Asserting on process-level
+  // 'unhandledRejection' events directly - not just on `bad`/`good` settling correctly -
+  // is what actually protects against that regression; the serialisation/rejection
+  // assertions below can pass even when the bug is present.
+  const unhandled: unknown[] = [];
+  const onUnhandledRejection = (reason: unknown) => unhandled.push(reason);
+  process.on('unhandledRejection', onUnhandledRejection);
+  try {
+    const order: string[] = [];
+    const bad = withLock('k', async () => {
+      order.push('a');
+      throw new Error('boom');
+    });
+    const good = withLock('k', async () => {
+      order.push('b');
+      return 'ok';
+    });
+    await expect(bad).rejects.toThrow('boom');
+    await expect(good).resolves.toBe('ok');
+    expect(order).toEqual(['a', 'b']);
+
+    // The `bad`/`good` pair above doesn't actually stress the leak: `good`'s own
+    // `prev.catch(() => {})` attaches a handler to whatever's in the map for 'k' - which,
+    // under the historical bug, IS the orphaned bookkeeping promise - so it gets observed
+    // as a side effect of the second call, buggy or not. The real production case is a key
+    // with no follow-up call at all (the last, or only, grab for that hebitsId), so only a
+    // lonely rejecting call on a key nobody else touches actually proves the bookkeeping
+    // promise doesn't leak.
+    const lonely = withLock('solo-key', async () => {
+      throw new Error('boom, alone');
+    });
+    await expect(lonely).rejects.toThrow('boom, alone');
+
+    // Node reports an unhandled rejection asynchronously (after the microtask queue that
+    // settled the promises above has drained), not within the same microtask turn as the
+    // awaits above - so give the event loop a couple of macrotask turns to let it fire
+    // before checking `unhandled`.
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+  } finally {
+    process.off('unhandledRejection', onUnhandledRejection);
+  }
+  expect(unhandled).toEqual([]);
 });
