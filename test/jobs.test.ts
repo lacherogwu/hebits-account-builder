@@ -1,7 +1,7 @@
 import { ApiError, LoginExpiredError } from 'hebits-client';
 import { expect, test, vi } from 'vitest';
-import { makeJobs } from '../src/jobs';
 import type { EnsureTorrent, JobsConfig, JobsHebits, JobsNotifier, JobsQBit, JobsStore, MakeJobsDeps } from '../src/jobs';
+import { makeJobs } from '../src/jobs';
 
 // Fakes only - nothing here touches the network, a real qBittorrent, or the filesystem.
 // JobsStore is narrow specifically so this fake never calls a real Store.putTorrent, which

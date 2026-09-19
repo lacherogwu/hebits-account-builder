@@ -82,7 +82,7 @@ export async function handleCookiePage(
     .get('cookie')
     ?.replace(/^cookie:\s*/i, '')
     .trim();
-  if (!cookie || !cookie.includes('=')) return send(400, page('That does not look like a cookie value.', false));
+  if (!cookie?.includes('=')) return send(400, page('That does not look like a cookie value.', false));
   // Never echo the pasted value back into the page or the log, on either path: it is a
   // credential, and this page is the one place an operator pastes it. Only the verify
   // outcome and the error's own message (never the cookie itself) are rendered or logged.

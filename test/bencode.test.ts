@@ -1,5 +1,5 @@
-import { expect, test } from 'vitest';
 import { createHash } from 'node:crypto';
+import { expect, test } from 'vitest';
 import { readTorrent } from '../src/bencode';
 
 const enc = (s: string) => `${Buffer.byteLength(s)}:${s}`;
@@ -47,7 +47,7 @@ test('multi-file torrent: infohash, files, offsets, pad files', () => {
     enc('private') +
     'i1e' +
     'e';
-  const buf = Buffer.from('d' + enc('announce') + enc('http://t/a') + enc('info') + info + 'e');
+  const buf = Buffer.from(`d${enc('announce')}${enc('http://t/a')}${enc('info')}${info}e`);
   const t = readTorrent(buf);
   expect(t.infoHash).toBe(createHash('sha1').update(info).digest('hex'));
   expect(t.name).toBe('Show');
@@ -60,9 +60,8 @@ test('multi-file torrent: infohash, files, offsets, pad files', () => {
 });
 
 test('single-file torrent', () => {
-  const info =
-    'd' + enc('length') + 'i10e' + enc('name') + enc('movie.mkv') + enc('piece length') + 'i4e' + enc('pieces') + enc('y'.repeat(60)) + 'e';
-  const t = readTorrent(Buffer.from('d' + enc('info') + info + 'e'));
+  const info = `d${enc('length')}i10e${enc('name')}${enc('movie.mkv')}${enc('piece length')}i4e${enc('pieces')}${enc('y'.repeat(60))}e`;
+  const t = readTorrent(Buffer.from(`d${enc('info')}${info}e`));
   expect(t.private).toBe(false);
   expect(t.files).toEqual([{ path: 'movie.mkv', length: 10, offset: 0 }]);
 });

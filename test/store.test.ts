@@ -1,7 +1,7 @@
-import { expect, test } from 'vitest';
-import { mkdtempSync, readFileSync, chmodSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { expect, test } from 'vitest';
 import { Store } from '../src/store';
 
 test('save persists to disk and returns true on success', () => {

@@ -1,6 +1,6 @@
-import { expect, test } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { expect, test } from 'vitest';
 import { Notifier, renderTemplate } from '../src/notify';
 
 async function withHook(fn: (url: string, got: Record<string, string>[]) => Promise<void>): Promise<void> {

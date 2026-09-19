@@ -8,8 +8,9 @@
 // checkLogin() itself or asserts on plumbing (that a provider function exists, that some
 // setter was called) - it asserts on the one thing that matters: the Cookie header an
 // actual outgoing request carries.
-import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+
 import { Hebits } from 'hebits-client';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 
 let sentCookies: string[];
 

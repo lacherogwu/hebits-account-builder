@@ -1,10 +1,10 @@
-import { expect, test, vi } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { makeGrabber, UserError, type GrabConfig, type GrabHebits, type GrabQBit } from '../src/grab';
-import { Store } from '../src/store';
+import { expect, test, vi } from 'vitest';
 import { readTorrent } from '../src/bencode';
+import { type GrabConfig, type GrabHebits, type GrabQBit, makeGrabber, UserError } from '../src/grab';
+import { Store } from '../src/store';
 
 // A one-file private torrent, bencoded by hand. Real bencode (not `hash: 'HASH'`): readTorrent
 // computes its infohash from these bytes, and the qbit fake below computes the same infohash

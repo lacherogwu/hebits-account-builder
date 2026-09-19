@@ -1,7 +1,7 @@
 import { LoginExpiredError } from 'hebits-client';
 import { expect, test } from 'vitest';
-import { handleCookiePage } from '../src/cookie-page';
 import type { CookiePageDeps, CookiePageReq, CookiePageRes } from '../src/cookie-page';
+import { handleCookiePage } from '../src/cookie-page';
 import type { Health } from '../src/jobs';
 
 // A POST whose body is a single `cookie` field, streamed the way http.IncomingMessage

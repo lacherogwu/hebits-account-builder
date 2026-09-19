@@ -1,19 +1,20 @@
 // Hebits account builder: grabs freeleech uploads, seeds them, and releases them when the disk fills.
-import { serve } from '@hono/node-server';
-import { Hono } from 'hono';
-import type { Context } from 'hono';
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
+
 import { timingSafeEqual } from 'node:crypto';
-import { statSync, copyFileSync, truncateSync } from 'node:fs';
+import { copyFileSync, statSync, truncateSync } from 'node:fs';
+import { serve } from '@hono/node-server';
 import { Hebits } from 'hebits-client';
-import { loadConfig, CONFIG_DIR, readCookie, writeCookie } from './config';
-import { Store } from './store';
-import { Notifier } from './notify';
-import { QBit } from './qbit';
+import type { Context } from 'hono';
+import { Hono } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
+import { CONFIG_DIR, loadConfig, readCookie, writeCookie } from './config';
+import type { CookiePageReq, CookiePageRes } from './cookie-page';
+import { handleCookiePage } from './cookie-page';
 import { makeGrabber, UserError } from './grab';
 import { makeJobs } from './jobs';
-import { handleCookiePage } from './cookie-page';
-import type { CookiePageReq, CookiePageRes } from './cookie-page';
+import { Notifier } from './notify';
+import { QBit } from './qbit';
+import { Store } from './store';
 import { VERSION } from './version';
 
 const cfg = loadConfig();
@@ -32,9 +33,10 @@ const store = new Store(CONFIG_DIR, cfg.timezone, (m) => log(m));
 // reaches the tracker on every load anyway, since dailyDownloads() never caches.
 const hebits = new Hebits({ cookie: () => readCookie() ?? '', cacheTtlMs: 0 });
 const qbit = new QBit(cfg);
+store.data.notified ??= {};
 const notifier = new Notifier(
   cfg.notify || {},
-  (store.data.notified ??= {}),
+  store.data.notified,
   () => store.save(),
   (m) => log(m),
 );
@@ -44,7 +46,8 @@ const GB = 1024 ** 3;
 const { ensureTorrent, daily } = makeGrabber({ cfg, store, hebits, qbit, log });
 
 function farmLog(action: string, text: string): void {
-  const list = (store.data.farmLog ??= []);
+  store.data.farmLog ??= [];
+  const list = store.data.farmLog;
   list.push({ at: new Date().toISOString(), action, text });
   store.data.farmLog = list.slice(-100);
   store.save();

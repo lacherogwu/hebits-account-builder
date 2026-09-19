@@ -1,5 +1,5 @@
 // Persistent state: grabs (for the daily limit) and hebitsId -> torrent index.
-import { readFileSync, writeFileSync, renameSync, unlinkSync, existsSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 export interface TorrentEntry {

@@ -1,5 +1,5 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
@@ -188,7 +188,7 @@ export function loadConfig(): Config {
   if (!token) {
     token = randomBytes(16).toString('hex');
     saved.token = token;
-    writeFileSync(CONFIG_FILE, JSON.stringify(saved, null, 2) + '\n', { mode: 0o600 });
+    writeFileSync(CONFIG_FILE, `${JSON.stringify(saved, null, 2)}\n`, { mode: 0o600 });
   }
 
   const configIssues: string[] = [];
@@ -235,5 +235,5 @@ export function readCookie(): string | undefined {
 
 export function writeCookie(cookie: string): void {
   mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
-  writeFileSync(COOKIE_FILE, cookie.trim() + '\n', { mode: 0o600 });
+  writeFileSync(COOKIE_FILE, `${cookie.trim()}\n`, { mode: 0o600 });
 }

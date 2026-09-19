@@ -3,9 +3,9 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { readTorrent } from './bencode';
-import { buildTags } from './tags';
+import { readTorrent, type Torrent } from './bencode';
 import type { Store, TorrentEntry } from './store';
+import { buildTags } from './tags';
 
 const GB = 1024 ** 3;
 
@@ -83,7 +83,7 @@ export function makeGrabber({ cfg, store, hebits, qbit, log }: GrabDeps) {
     { category = cfg.watchCategory, savePath = cfg.watchPath }: EnsureTorrentOptions = {},
   ) {
     return withLock(hebitsId, async () => {
-      let entry = store.torrent(hebitsId);
+      const entry = store.torrent(hebitsId);
       if (entry?.hash && (await qbit.torrent(entry.hash))) {
         if (meta.imdb && !entry.imdb) {
           store.putTorrent(hebitsId, meta);
@@ -102,7 +102,7 @@ export function makeGrabber({ cfg, store, hebits, qbit, log }: GrabDeps) {
         const free = await qbit.freeSpace();
         if (meta.size && free !== undefined && meta.size > free - cfg.minFreeGB * GB) throw new UserError('not enough disk space');
         buf = await hebits.downloadTorrent(Number(hebitsId));
-        let parsed;
+        let parsed: Torrent;
         try {
           parsed = readTorrent(buf);
         } catch {

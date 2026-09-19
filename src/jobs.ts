@@ -1,13 +1,13 @@
 // The two background jobs: grab to build the account, release to keep the disk free.
 import { networkInterfaces } from 'node:os';
-import { ApiError, HebitsError, LoginExpiredError, RateLimitedError } from 'hebits-client';
 import type { BrowseOptions, HebitsTorrent } from 'hebits-client';
-import { pickGrabs, pickRemovals, describe, stuckDownloads } from './farm';
-import type { GrabOptions, CleanupOptions } from './farm';
-import type { Torrent } from './qbit';
-import type { TorrentEntry } from './store';
+import { ApiError, HebitsError, LoginExpiredError, RateLimitedError } from 'hebits-client';
+import type { CleanupOptions, GrabOptions } from './farm';
+import { describe, pickGrabs, pickRemovals, stuckDownloads } from './farm';
 import type { EnsureTorrentOptions } from './grab';
 import type { SendOptions } from './notify';
+import type { Torrent } from './qbit';
+import type { TorrentEntry } from './store';
 
 const GB = 1024 ** 3;
 
