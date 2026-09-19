@@ -8061,12 +8061,16 @@ function makeJobs({ cfg, store, hebits, qbit, notifier, ensureTorrent, farmLog, 
 			noteLogin(false, e.message);
 			return;
 		}
+		const message = e instanceof Error ? e.message : String(e);
 		if (e instanceof ApiError || e instanceof RateLimitedError) {
-			alertProblem("service", "Hebits builder: the tracker API changed or is unhappy", e.message);
+			alertProblem("service", "Hebits builder: the tracker API changed or is unhappy", message);
 			return;
 		}
-		const message = e.message;
-		if (/qBittorrent|ECONNREFUSED|fetch failed/i.test(message)) alertProblem("service", "Hebits builder: a service is down", `Auto-grab failed: ${message}`);
+		if (e instanceof HebitsError) {
+			alertProblem("service", "Hebits builder: the tracker is unhappy", message);
+			return;
+		}
+		alertProblem("service", "Hebits builder: a service is down", `Auto-grab failed: ${message}`);
 	}
 	let farmBusy = false;
 	async function farmTick() {
@@ -8074,8 +8078,8 @@ function makeJobs({ cfg, store, hebits, qbit, notifier, ensureTorrent, farmLog, 
 		farmBusy = true;
 		try {
 			const stats = await hebits.stats();
-			noteLogin(true);
 			const daily = await hebits.dailyDownloads(stats.userId);
+			noteLogin(true);
 			const items = await hebits.browse({
 				orderBy: "time",
 				orderWay: "desc"
@@ -8250,7 +8254,10 @@ const VERSION = "2.0.0";
 //#region src/server.ts
 const cfg = loadConfig();
 const store = new Store(CONFIG_DIR, cfg.timezone, (m) => log(m));
-const hebits = new Hebits({ cookie: readCookie() ?? "" });
+const hebits = new Hebits({
+	cookie: readCookie() ?? "",
+	cacheTtlMs: 0
+});
 const qbit = new QBit(cfg);
 const notifier = new Notifier(cfg.notify || {}, store.data.notified ??= {}, () => store.save(), (m) => log(m));
 const log = (...a) => console.log((/* @__PURE__ */ new Date()).toISOString(), ...a);
