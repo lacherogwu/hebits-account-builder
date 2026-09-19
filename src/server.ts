@@ -200,7 +200,18 @@ app.onError((err, c) => {
   return c.text((err as Error).message, err instanceof UserError ? 409 : 500, { 'Content-Type': 'text/plain; charset=utf-8' });
 });
 
-// launchd keeps the log file open in append mode: copy then truncate.
+// LOG_FILE is where the LaunchAgent points StandardOutPath/StandardErrorPath (see
+// deploy/org.user.hebits-builder.plist), which is what `log` above actually writes to - it
+// is console.log, so every line goes to stdout and launchd appends it there. That pairing is
+// the whole point: rotating cfg.logFile while the process logged somewhere else meant this
+// function faithfully rotated an empty file for as long as it existed while the real log
+// grew without limit.
+//
+// DO NOT turn this into a rename. launchd opened that file once, in append mode, and holds
+// the fd for the life of the process: truncating in place moves its write offset back to
+// zero and logging continues into the same file, but renaming it leaves launchd writing to
+// an unlinked inode - the log appears to stop dead until the next restart, and `.1` grows
+// instead. copyFileSync + truncateSync is the only shape that works here.
 function rotateLog(): void {
   try {
     if (statSync(LOG_FILE).size < 20 * 1024 * 1024) return;

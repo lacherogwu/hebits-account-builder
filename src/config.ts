@@ -63,6 +63,9 @@ const DEFAULTS: Omit<Config, 'token' | 'configIssues'> = {
   notify: { webhookUrl: '' },
   lowDiskAlertGB: 15,
   torrentDir: join(CONFIG_DIR, 'torrents'),
+  // Also what deploy/org.user.hebits-builder.plist points StandardOutPath/StandardErrorPath
+  // at, which is what makes rotateLog() in server.ts rotate the log that actually exists.
+  // The plist holds the machine-specific spelling of this path; this default stays portable.
   logFile: join(CONFIG_DIR, 'builder.log'),
 };
 

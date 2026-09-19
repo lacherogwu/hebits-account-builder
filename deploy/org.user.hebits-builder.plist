@@ -11,7 +11,12 @@
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
     <key>ThrottleInterval</key><integer>10</integer>
-    <key>StandardOutPath</key><string>__HOME__/Library/Logs/hebits-builder.log</string>
-    <key>StandardErrorPath</key><string>__HOME__/Library/Logs/hebits-builder.log</string>
+    <!-- Must stay equal to config.json's `logFile` (default <config dir>/builder.log). The
+         service logs with console.log, so every line lands here via launchd, and server.ts's
+         rotateLog() truncates exactly this path once it passes 20 MB. Point these two
+         somewhere else and the rotator faithfully rotates an empty file while the real log
+         grows without limit. -->
+    <key>StandardOutPath</key><string>__HOME__/.config/hebits-account-builder/builder.log</string>
+    <key>StandardErrorPath</key><string>__HOME__/.config/hebits-account-builder/builder.log</string>
 </dict>
 </plist>
