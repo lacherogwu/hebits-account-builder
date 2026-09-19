@@ -12,12 +12,6 @@ using a login cookie you paste in through this service's own `/cookie` page, and
 blocked immediately. Nothing here proxies through TorBox, AIOStreams or similar — every
 torrent downloads, seeds and stays on the machine this service runs on.
 
-This is one half of a split: the other half is a separate Stremio addon that streams from
-the same qBittorrent instance. They don't talk to each other and neither depends on the
-other running — they share state only through tags this service writes into qBittorrent
-(see [Tags](#tags) below), so a streaming addon can tell which torrents it didn't add
-itself.
-
 ## Requirements
 
 - Node.js ≥ 22
@@ -35,8 +29,7 @@ npm run build
 npm start
 ```
 
-`npm run build` bundles the service into a single `dist/server.mjs` (see
-[Deploy](#deploy) for why that matters). The first run creates
+`npm run build` compiles the service to `dist/server.mjs`. The first run creates
 `~/.config/hebits-account-builder/config.json` with a random `token` and prints either the
 listening banner or an error explaining what to fix (see [Configuration](#configuration)).
 Until a cookie is saved through `/cookie`, the service starts fine but reports Hebits login
@@ -181,5 +174,4 @@ npm run deploy
 `scripts/deploy.sh` runs `npm run typecheck` and `npm test`, builds with `npm run build`, and
 copies the single resulting `dist/server.mjs` to the target machine. The target needs a Node
 ≥ 22 binary to run it and nothing else — no `node_modules`, no `npm install`, no registry
-access. That's a deliberate improvement over shipping a source tree: the deployed artifact is
-one file.
+access.
