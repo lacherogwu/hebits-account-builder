@@ -27,7 +27,7 @@ export interface JobsConfig {
 
 // The slice of hebits-client's Hebits the jobs read.
 export interface JobsHebits {
-  stats(): Promise<{ userId: number; uploaded: number; downloaded: number }>;
+  stats(): Promise<{ userId: number; uploaded: number; downloaded: number; userClass?: string }>;
   dailyDownloads(userId?: number): Promise<{ used: number; limit: number }>;
   browse(options?: BrowseOptions): Promise<HebitsTorrent[]>;
 }
@@ -52,8 +52,10 @@ export interface JobsStore {
   data: {
     torrents: Record<string, TorrentEntry>;
     farmLog?: { action: string; text: string; at: string }[];
+    lastRank?: string;
   };
   putTorrent(hebitsId: string, entry: Partial<TorrentEntry>): void;
+  noteRank(rank: string): void;
 }
 
 export type EnsureTorrent = (
@@ -160,6 +162,9 @@ export function makeJobs({ cfg, store, hebits, qbit, notifier, ensureTorrent, fa
       noteLogin(true);
       // No `categories` here: filtering server-side would change which results come back
       // and so which torrents the policy ever sees. The category filter stays in farm.ts.
+      // Remembered for the daily-allowance fallback in grab.ts, which only runs when the
+      // tracker is unreachable and so cannot ask for the rank itself.
+      if (stats.userClass) store.noteRank(stats.userClass);
       const items = await hebits.browse({ orderBy: 'time', orderWay: 'desc' });
       const freeBytes = await qbit.freeSpace();
       if (!Number.isFinite(freeBytes)) throw new Error('qBittorrent returned a non-numeric free space value');

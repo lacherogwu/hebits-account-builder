@@ -300,7 +300,9 @@ test('an unreadable config.json (permission denied) does not throw and is left u
   expect(readFileSync(cfgPath, 'utf8')).toBe(original);
   expect(readdirSync(dir).find((f) => f.startsWith('config.json.bad-'))).toBeUndefined();
 
-  expect(cfg?.dailyLimit).toBe(10); // nothing was read, so nothing was applied
+  // Nothing was read, so nothing was applied: 0 is DEFAULTS.dailyLimit, the sentinel that
+  // means "derive the allowance from the rank the account holds" (see Config.dailyLimit).
+  expect(cfg?.dailyLimit).toBe(0);
   expect(cfg?.token).toMatch(/^[0-9a-f]{32}$/); // usable this session, in memory only
   expect(cfg?.configIssues.some((m) => m.includes('could not be read'))).toBe(true);
 });

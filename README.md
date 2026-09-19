@@ -46,7 +46,7 @@ environment variable. See `deploy/config.example.json` for a starting point.
 | `token` | random, generated on first run | Secret path segment every route sits behind |
 | `port` | `7001` | Listen port, all interfaces |
 | `lanHost` | empty (auto-detected) | LAN address used in links such as the cookie-update alert; set it if auto-detection picks the wrong interface |
-| `dailyLimit` | `10` | Fallback only; the real counter is read from Hebits through `hebits-client` |
+| `dailyLimit` | `0` | Fallback only; the real counter is read from Hebits through `hebits-client`. `0` means "take the allowance of the rank the account currently holds" (see [The rank ladder](#the-rank-ladder)); a non-zero value pins it |
 | `dailyLimitByDay` | `{}` | Per-day overrides, e.g. `{"2026-09-17": 5}` for a new account's first day |
 | `minFreeGB` | `20` | Free disk space to keep after a download |
 | `timezone` | `Asia/Jerusalem` | Used for the daily download counter's day boundary |
@@ -101,6 +101,29 @@ it: `hebits:<id>` and, when known, `imdb:tt<id>`. A `.torrent` file itself carri
 these tags are the only record. A separate tool reading qBittorrent (such as a companion
 Stremio addon sharing the same instance) can use them to recognize torrents this service
 added and match them to an IMDb id, without either service depending on the other.
+
+## The rank ladder
+
+Each rank sets its own requirements and its own daily download allowance. `RANKS` in
+`src/farm.ts` carries the table; the allowance is read from the rank the account currently
+holds, so a promotion raises it without anyone editing `config.json`.
+
+| Rank | Time | Volume | Ratio | Torrents | Demoted below | Downloads/day |
+|---|---|---|---|---|---|---|
+| Heb Rookie | — | — | — | — | — | 5 on day one, then 10 |
+| Heb User | 30 days | 20 GB | 1.25 | — | 0.8 | 25 (30 after 6 months) |
+| Heb Lover | 6 weeks | 75 GB | 1.5 | 50 | 1.45 | 50 |
+| Heb Veteran | 12 weeks | 250 GB | 2.05 | 100 | 1.95 | 50 |
+| Heb Fanatic | 16 weeks | 500 GB | 2.5 | 150 | 2.45 | 65 |
+| Heb Elite | 52 weeks | 1 TB | 3 | 350 | 2.95 | 65 |
+| Heb Supreme | 82 weeks | 2 TB | 4 | 500 | 3.95 | 80 |
+| Heb Prophet | 130 weeks | 3.5 TB | 5 | 700 | 4.95 | 100 |
+
+The table flattens two footnotes toward the conservative reading, because over-grabbing on a
+private tracker is not a cosmetic mistake: Heb Rookie's first day is 5 downloads, which is what
+`dailyLimitByDay` is for, and Heb User's allowance rises to 30 after six months, which nothing
+here can verify. Donor, V.I.P and the staff classes are not farmable and are deliberately
+absent — an account in one of them reads as an unknown rank, and every fallback applies.
 
 ## Account-building policy
 

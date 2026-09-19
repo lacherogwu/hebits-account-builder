@@ -235,3 +235,42 @@ test('a minimal state.json with only the two required keys is loaded untouched',
 test('loadIssue is null when state.json is absent', () => {
   expect(new Store(mkdtempSync(join(tmpdir(), 'store-')), 'UTC').loadIssue).toBeNull();
 });
+
+test('the daily allowance prefers the per-day override, then a pinned limit, then the rank', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'store-'));
+  const store = new Store(dir, 'UTC');
+  const day = new Date('2026-09-18T12:00:00.000Z');
+  // The whole point of the sentinel: 0 means "the ladder decides", so a promotion raises the
+  // fallback allowance without anyone editing config.json. Heb User's 25 is the rank value.
+  expect(store.limitToday({ dailyLimit: 0 }, 25, day)).toBe(25);
+  // A pinned non-zero value still wins over the rank - an operator who wrote a number down
+  // did so to hold it.
+  expect(store.limitToday({ dailyLimit: 5 }, 25, day)).toBe(5);
+  // And the per-day override wins over both, which is how an account's first day gets its 5.
+  expect(store.limitToday({ dailyLimit: 5, dailyLimitByDay: { '2026-09-18': 2 } }, 25, day)).toBe(2);
+  expect(store.limitToday({ dailyLimit: 0, dailyLimitByDay: { '2026-09-18': 2 } }, 25, day)).toBe(2);
+  // On any other day that override is not in force.
+  expect(store.limitToday({ dailyLimit: 0, dailyLimitByDay: { '2026-09-17': 2 } }, 25, day)).toBe(25);
+  // Nothing pinned and no rank to go on: fail closed rather than invent an allowance.
+  expect(store.limitToday({ dailyLimit: 0 }, 0, day)).toBe(0);
+});
+
+test('the last rank seen is persisted, and rewritten only when it changes', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'store-'));
+  const store = new Store(dir, 'UTC');
+  store.noteRank('Heb Rookie', new Date('2026-09-18T12:00:00.000Z'));
+  expect(store.data.lastRank).toBe('Heb Rookie');
+  expect(store.data.lastRankAt).toBe('2026-09-18T12:00:00.000Z');
+  expect(JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8')).lastRank).toBe('Heb Rookie');
+
+  // Called on every farm tick: the same rank must not rewrite state.json every ten minutes.
+  store.noteRank('Heb Rookie', new Date('2026-09-19T12:00:00.000Z'));
+  expect(store.data.lastRankAt).toBe('2026-09-18T12:00:00.000Z');
+  // A promotion does get written, timestamp and all.
+  store.noteRank('Heb User', new Date('2026-09-20T12:00:00.000Z'));
+  expect(store.data.lastRank).toBe('Heb User');
+  expect(store.data.lastRankAt).toBe('2026-09-20T12:00:00.000Z');
+  // An empty reading is not a rank and must not erase the one that is known.
+  store.noteRank('');
+  expect(store.data.lastRank).toBe('Heb User');
+});

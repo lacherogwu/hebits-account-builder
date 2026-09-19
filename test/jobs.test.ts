@@ -33,6 +33,7 @@ function deps(
   const store: JobsStore = {
     data: { torrents: {}, farmLog: [] },
     putTorrent: vi.fn(),
+    noteRank: vi.fn(),
     ...over.store,
   };
   const hebits: JobsHebits = {
@@ -188,4 +189,24 @@ test('control: a readable reading above the threshold raises no disk alert at al
   const { cleanupTick } = makeJobs(deps({ qbit, notifier }));
   await cleanupTick();
   expect(diskAlerts(notifier)).toEqual([]);
+});
+
+// --- The remembered rank ------------------------------------------------------------------
+
+test('the farm tick remembers the rank the tracker reported', async () => {
+  const noteRank = vi.fn();
+  const stats = vi.fn().mockResolvedValue({ userId: 1, uploaded: 30 * GB, downloaded: 10 * GB, userClass: 'Heb Rookie' });
+  const { farmTick } = makeJobs(deps({ hebits: { stats }, store: { data: { torrents: {}, farmLog: [] }, putTorrent: vi.fn(), noteRank } }));
+  await farmTick();
+  // grab.ts's daily() falls back to this when the tracker is unreachable, which is exactly
+  // when it cannot ask for the rank itself.
+  expect(noteRank).toHaveBeenCalledWith('Heb Rookie');
+});
+
+test('a tracker that reports no class leaves the remembered rank alone', async () => {
+  const noteRank = vi.fn();
+  const stats = vi.fn().mockResolvedValue({ userId: 1, uploaded: 0, downloaded: 0 });
+  const { farmTick } = makeJobs(deps({ hebits: { stats }, store: { data: { torrents: {}, farmLog: [] }, putTorrent: vi.fn(), noteRank } }));
+  await farmTick();
+  expect(noteRank).not.toHaveBeenCalled();
 });

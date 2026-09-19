@@ -6,6 +6,90 @@ import { isDiscOrRemux, seasonInfo } from './parse';
 const GB = 1024 ** 3;
 const HOUR = 3600 * 1000;
 
+// --- The rank ladder ----------------------------------------------------------------------
+// From the tracker's own wiki ("userclasses"). Of the requirements a rank lists, three can be
+// farmed - download volume, ratio, and the number of torrents downloaded in full - and one
+// cannot: time on site. Time is carried here so progress can be REPORTED honestly; nothing
+// below is allowed to steer a decision by it.
+//
+// Two footnotes the table flattens, both toward the conservative reading, because
+// over-grabbing on a private tracker is not a cosmetic mistake:
+//   - Heb Rookie is allowed 5 downloads on the account's first day and 10 after that. The
+//     first day is what `dailyLimitByDay` in config.json exists for; 10 is the steady state.
+//   - Heb User's allowance rises from 25 to 30 after six months. Nothing here knows the join
+//     date, so the entry value is what is carried.
+//
+// Only the eight ranks an account can climb are listed. Donor, V.I.P and the staff classes
+// are not farmable and are deliberately absent: an account in one of them reads as an unknown
+// rank, which every function below handles by falling back rather than by guessing.
+export interface Rank {
+  name: string;
+  /** Days on the site. The one requirement no policy can farm - report it, never chase it. */
+  days: number;
+  /** GB that count as downloaded. Freeleech bytes never count toward this. */
+  volumeGB: number;
+  /** The ratio the rank requires. */
+  ratio: number;
+  /** Torrents the TRACKER considers fully downloaded. */
+  torrents: number;
+  /** Hold this rank, let the ratio fall below this, and the rank is revoked. */
+  demotedBelow: number;
+  /** Downloads allowed per day while holding this rank. */
+  dailyLimit: number;
+}
+
+// Named individually so the two that are referenced directly below need no index lookup
+// (noUncheckedIndexedAccess would type `RANKS[1]` as possibly undefined).
+const HEB_ROOKIE: Rank = { name: 'Heb Rookie', days: 0, volumeGB: 0, ratio: 0, torrents: 0, demotedBelow: 0, dailyLimit: 10 };
+const HEB_USER: Rank = { name: 'Heb User', days: 30, volumeGB: 20, ratio: 1.25, torrents: 0, demotedBelow: 0.8, dailyLimit: 25 };
+
+export const RANKS: readonly Rank[] = [
+  HEB_ROOKIE,
+  HEB_USER,
+  { name: 'Heb Lover', days: 42, volumeGB: 75, ratio: 1.5, torrents: 50, demotedBelow: 1.45, dailyLimit: 50 },
+  { name: 'Heb Veteran', days: 84, volumeGB: 250, ratio: 2.05, torrents: 100, demotedBelow: 1.95, dailyLimit: 50 },
+  { name: 'Heb Fanatic', days: 112, volumeGB: 500, ratio: 2.5, torrents: 150, demotedBelow: 2.45, dailyLimit: 65 },
+  { name: 'Heb Elite', days: 364, volumeGB: 1024, ratio: 3, torrents: 350, demotedBelow: 2.95, dailyLimit: 65 },
+  { name: 'Heb Supreme', days: 574, volumeGB: 2048, ratio: 4, torrents: 500, demotedBelow: 3.95, dailyLimit: 80 },
+  { name: 'Heb Prophet', days: 910, volumeGB: 3584, ratio: 5, torrents: 700, demotedBelow: 4.95, dailyLimit: 100 },
+];
+
+// The tracker's own spelling of the class arrives in AccountStats.userClass, so match
+// leniently on whitespace and case rather than on an exact string.
+const normaliseName = (name: string | undefined): string =>
+  String(name ?? '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+
+const BY_NAME = new Map(RANKS.map((r) => [normaliseName(r.name), r]));
+
+export function rankByName(name: string | undefined): Rank | undefined {
+  return BY_NAME.get(normaliseName(name));
+}
+
+/** The next rank up, or undefined for an unknown rank and for the top of the ladder. */
+export function nextRankAfter(name: string | undefined): Rank | undefined {
+  const i = RANKS.findIndex((r) => normaliseName(r.name) === normaliseName(name));
+  return i < 0 ? undefined : RANKS[i + 1];
+}
+
+/** The ratio that costs an account the rank it currently holds. 0 when the rank is unknown,
+ *  which is the fail-open direction: an unknown rank adds no floor of its own, and the
+ *  volume-based floor in requiredRatioFor() still applies. */
+export function demotionRatioFor(rank: string | undefined): number {
+  return rankByName(rank)?.demotedBelow ?? 0;
+}
+
+/** Downloads per day at this rank, or undefined when the rank is unknown. */
+export function dailyLimitFor(rank: string | undefined): number | undefined {
+  return rankByName(rank)?.dailyLimit;
+}
+
+/** The allowance to assume when the rank is not known at all: the bottom of the ladder, which
+ *  is the only value that cannot be an over-estimate. */
+export const FALLBACK_DAILY_LIMIT = HEB_ROOKIE.dailyLimit;
+
 // Hebits required-ratio table (0% seeding column, the conservative one).
 export function requiredRatioFor(downloaded: number): number {
   if (downloaded < 5 * GB) return 0;

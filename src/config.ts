@@ -18,7 +18,9 @@ export interface Config {
   port: number;
   // LAN address to put in links (e.g. the cookie-update alert). Empty auto-detects it.
   lanHost: string;
-  // Hebits Heb Rookie: 5 on day one, then 10. Raise when the account ranks up.
+  // Fallback allowance, used only when the tracker's own counter is unreachable. 0 means
+  // "derive it from the rank the account currently holds" (the ladder in farm.ts specifies
+  // one per rank), which is the default; a non-zero value pins it for every day.
   dailyLimit: number;
   // Per-day exceptions, e.g. { "2026-09-17": 5 } for the account's first day.
   dailyLimitByDay: Record<string, number>;
@@ -57,7 +59,7 @@ export interface Config {
 const DEFAULTS: Omit<Config, 'token' | 'configIssues'> = {
   port: 7001,
   lanHost: '',
-  dailyLimit: 10,
+  dailyLimit: 0, // 0 = derive from the current rank; see Config.dailyLimit
   dailyLimitByDay: {},
   minFreeGB: 20,
   timezone: 'Asia/Jerusalem',

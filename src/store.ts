@@ -27,6 +27,11 @@ export interface StoreData {
   // Notifier throttle state: { [kind]: lastSentMs }. Created on first use via `??= {}`
   // in server.js, so it's absent from a fresh store.
   notified?: Record<string, number>;
+  // The last rank the tracker reported, and when. Written by the farm tick; read only when
+  // the tracker is unreachable, which is exactly when the live figure is unavailable and the
+  // daily allowance still has to be guessed from something better than a hardcoded number.
+  lastRank?: string;
+  lastRankAt?: string;
 }
 
 // The slice of Config that limitToday() needs. Config itself is defined where it's loaded.
@@ -155,8 +160,23 @@ export class Store {
     }
   }
 
-  limitToday(cfg: DailyLimitConfig, now: Date = new Date()): number {
-    return cfg.dailyLimitByDay?.[dayKey(now, this.timezone)] ?? cfg.dailyLimit;
+  // Precedence: the per-day override, then an explicitly pinned cfg.dailyLimit, then the
+  // allowance of the rank the account holds (`rankLimit`, supplied by the caller so this
+  // class keeps depending on nothing but node:fs, node:path and its own types). cfg.dailyLimit
+  // defaults to 0 precisely so the rank can supply it; a caller with no rank to offer passes
+  // the most conservative one it knows, and 0 - no grabs - is the fail-closed last resort.
+  limitToday(cfg: DailyLimitConfig, rankLimit = 0, now: Date = new Date()): number {
+    return cfg.dailyLimitByDay?.[dayKey(now, this.timezone)] ?? (cfg.dailyLimit > 0 ? cfg.dailyLimit : rankLimit);
+  }
+
+  // Remembered for the daily-allowance fallback above. Saves only on a change: this is called
+  // on every farm tick, and rewriting state.json every ten minutes to store the same string
+  // buys nothing.
+  noteRank(rank: string, now: Date = new Date()): void {
+    if (!rank || this.data.lastRank === rank) return;
+    this.data.lastRank = rank;
+    this.data.lastRankAt = now.toISOString();
+    this.save();
   }
 
   grabsToday(now: Date = new Date()): number {

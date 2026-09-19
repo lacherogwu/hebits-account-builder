@@ -8,7 +8,7 @@
   "seedCategory": "seed-auto",
   "seedPath": "/home/you/hebits/seed",
   "timezone": "Asia/Jerusalem",
-  "dailyLimit": 10,
+  "dailyLimit": 0,
   "minFreeGB": 20,
   "lowDiskAlertGB": 15,
   "farm": { "enabled": true, "intervalMin": 10 },

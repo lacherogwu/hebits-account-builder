@@ -4,6 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { readTorrent, type Torrent } from './bencode';
+import { dailyLimitFor, FALLBACK_DAILY_LIMIT } from './farm';
 import type { Store, TorrentEntry } from './store';
 import { buildTags } from './tags';
 
@@ -73,7 +74,11 @@ export function makeGrabber({ cfg, store, hebits, qbit, log }: GrabDeps) {
       return await hebits.dailyDownloads();
     } catch (e) {
       log(`hebits daily downloads: ${(e as Error).message}`);
-      return { used: store.grabsToday(), limit: store.limitToday(cfg) };
+      // The tracker is unreachable, so its own counter and its own rank reading are both
+      // gone. The last rank it reported is what is left; the ladder gives that rank's
+      // allowance, and an account whose rank was never seen falls back to the bottom of the
+      // ladder rather than to a number picked once and left behind by every promotion.
+      return { used: store.grabsToday(), limit: store.limitToday(cfg, dailyLimitFor(store.data.lastRank) ?? FALLBACK_DAILY_LIMIT) };
     }
   }
 
