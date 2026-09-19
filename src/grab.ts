@@ -100,7 +100,14 @@ export function makeGrabber({ cfg, store, hebits, qbit, log }: GrabDeps) {
         const d = await daily();
         if (d.used >= d.limit) throw new UserError('daily download limit reached');
         const free = await qbit.freeSpace();
-        if (meta.size && free !== undefined && meta.size > free - cfg.minFreeGB * GB) throw new UserError('not enough disk space');
+        // Fail closed, the same way farm.ts's pickGrabs/pickRemovals do. qbit.freeSpace()
+        // returns NaN when qBittorrent's maindata has no free_space_on_disk, and the old
+        // `free !== undefined` guard let that straight through: every comparison against NaN
+        // is false, so the one check standing between a grab and a full disk was skipped
+        // exactly when the disk state was unknown. Refusing costs one grab; the daily
+        // allowance is small and the next tick retries.
+        if (!Number.isFinite(free)) throw new UserError('qBittorrent did not report free disk space');
+        if (meta.size && meta.size > free - cfg.minFreeGB * GB) throw new UserError('not enough disk space');
         buf = await hebits.downloadTorrent(Number(hebitsId));
         let parsed: Torrent;
         try {

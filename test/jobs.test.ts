@@ -140,3 +140,52 @@ test('browse is called without a categories filter', async () => {
   await farmTick();
   expect(browse.mock.calls[0]?.[0]).not.toHaveProperty('categories');
 });
+
+// The low-disk alert is the only thing that says a release pass could not free enough. Its
+// threshold comparison ran against qbit.freeSpace(), which returns NaN when qBittorrent's
+// maindata carries no free_space_on_disk (see src/qbit.ts) - and `NaN < threshold` is false, so
+// the alert stayed silent exactly when the disk state was unknown. The first freeSpace() call
+// in cleanupTick is the one pickRemovals uses and already fails closed; these fakes answer it
+// normally and make only the post-release reading unreadable, so this test reaches the
+// comparison under test rather than stopping at the earlier guard.
+const GB = 1024 ** 3;
+const diskAlerts = (notifier: Partial<JobsNotifier>): string[] =>
+  (notifier.send as ReturnType<typeof vi.fn>).mock.calls.filter((c: unknown[]) => c[0] === 'disk').map((c: unknown[]) => String(c[1]));
+
+test('an unreadable free-space reading after a release pass alerts instead of staying silent', async () => {
+  const notifier: Partial<JobsNotifier> = { send: vi.fn().mockResolvedValue(true), reset: vi.fn(), prune: vi.fn() };
+  const qbit: Partial<JobsQBit> = {
+    freeSpace: vi
+      .fn()
+      .mockResolvedValueOnce(500 * GB)
+      .mockResolvedValueOnce(NaN),
+  };
+  const { cleanupTick } = makeJobs(deps({ qbit, notifier }));
+  await cleanupTick();
+  expect(diskAlerts(notifier)).toEqual(['Hebits builder: free disk space unknown']);
+});
+
+// Control 1: a readable reading below the threshold still raises the ordinary alert, so the
+// branch above didn't swallow the real one.
+test('control: a readable reading below the threshold still raises the disk-almost-full alert', async () => {
+  const notifier: Partial<JobsNotifier> = { send: vi.fn().mockResolvedValue(true), reset: vi.fn(), prune: vi.fn() };
+  const qbit: Partial<JobsQBit> = {
+    freeSpace: vi
+      .fn()
+      .mockResolvedValueOnce(500 * GB)
+      .mockResolvedValueOnce(5 * GB),
+  };
+  const { cleanupTick } = makeJobs(deps({ qbit, notifier }));
+  await cleanupTick();
+  expect(diskAlerts(notifier)).toEqual(['Hebits builder: disk almost full']);
+});
+
+// Control 2: a healthy disk raises nothing. Without this, an implementation that alerted on
+// every tick would pass both tests above.
+test('control: a readable reading above the threshold raises no disk alert at all', async () => {
+  const notifier: Partial<JobsNotifier> = { send: vi.fn().mockResolvedValue(true), reset: vi.fn(), prune: vi.fn() };
+  const qbit: Partial<JobsQBit> = { freeSpace: vi.fn().mockResolvedValue(500 * GB) };
+  const { cleanupTick } = makeJobs(deps({ qbit, notifier }));
+  await cleanupTick();
+  expect(diskAlerts(notifier)).toEqual([]);
+});

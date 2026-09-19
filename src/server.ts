@@ -177,6 +177,11 @@ app.get('/:token/notify-test', async (c) => {
 app.get('/:token/status', async (c) => {
   const d = await daily();
   const st = await hebits.stats().catch(() => undefined);
+  // Unguarded, a qBittorrent that is down or unreachable turned this whole page into a 500 -
+  // and this is the page you open when things are broken. Every other reading here already
+  // degrades on its own (stats() catches, daily() falls back to the local ledger), so this
+  // one does too: null means "not known", which `|| 0` would have rendered as a full disk.
+  const freeBytes = await qbit.freeSpace().catch(() => NaN);
   return json(c, 200, {
     version: VERSION,
     account: st && {
@@ -193,7 +198,7 @@ app.get('/:token/status', async (c) => {
     // the log line nobody was watching when the process started.
     health: { ...health, logFile: LOG_FILE, configIssues: cfg.configIssues, storeIssue: store.loadIssue },
     recentActivity: (store.data.farmLog || []).slice(-20).reverse(),
-    freeGB: Math.round(((await qbit.freeSpace()) || 0) / GB),
+    freeGB: Number.isFinite(freeBytes) ? Math.round(freeBytes / GB) : null,
     torrents: Object.entries(store.data.torrents)
       .filter(([, t]) => t.hash && !t.removedAt)
       .map(([id, t]) => ({ id, name: t.name, imdb: t.imdb })),

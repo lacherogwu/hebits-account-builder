@@ -137,3 +137,37 @@ test('withLock serialises by key and a rejection does not leak', async () => {
   }
   expect(unhandled).toEqual([]);
 });
+
+// qbit.freeSpace() returns NaN when qBittorrent's maindata carries no free_space_on_disk (see
+// src/qbit.ts), and NaN compares false against every threshold - so the old `free !== undefined`
+// guard skipped the disk check exactly when the disk state was unknown, and kept grabbing.
+// farm.ts's pickGrabs/pickRemovals already fail closed on the same reading; this makes the
+// third one consistent.
+test('an unreadable free-space reading refuses the grab instead of downloading blind', async () => {
+  const { grabber, hebits, qbit, added } = harness();
+  qbit.freeSpace = async () => NaN;
+
+  await expect(grabber.ensureTorrent('7', { size: 5 * 1024 ** 3, title: 'X' })).rejects.toThrow(UserError);
+  // The post-state, not just the throw: nothing was fetched from Hebits (so no daily-allowance
+  // slot was spent) and nothing was handed to qBittorrent.
+  expect(hebits.downloadTorrent).not.toHaveBeenCalled();
+  expect(added).toEqual([]);
+});
+
+// The control: the same call with a readable reading and room to spare goes through. Without
+// it, an implementation that refused every grab would pass the test above.
+test('control: a readable free-space reading with room to spare still grabs', async () => {
+  const { grabber, hebits, added } = harness();
+  await grabber.ensureTorrent('8', { size: 5 * 1024 ** 3, title: 'X' });
+  expect(hebits.downloadTorrent).toHaveBeenCalled();
+  expect(added).toHaveLength(1);
+});
+
+// And the guard the new one must not have displaced: a readable reading that genuinely leaves
+// too little room still refuses, with the message that says so.
+test('control: a readable reading with too little room still refuses, for the original reason', async () => {
+  const { grabber, hebits, qbit } = harness({ minFreeGB: 20 });
+  qbit.freeSpace = async () => 21 * 1024 ** 3; // 21 GB free, 20 GB reserve, 5 GB wanted
+  await expect(grabber.ensureTorrent('9', { size: 5 * 1024 ** 3, title: 'X' })).rejects.toThrow(/not enough disk space/);
+  expect(hebits.downloadTorrent).not.toHaveBeenCalled();
+});

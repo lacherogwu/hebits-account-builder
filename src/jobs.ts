@@ -247,7 +247,18 @@ export function makeJobs({ cfg, store, hebits, qbit, notifier, ensureTorrent, fa
         );
       }
       const freeAfter = await qbit.freeSpace();
-      if (freeAfter < (cfg.lowDiskAlertGB ?? 15) * GB) {
+      // Fail closed: qbit.freeSpace() returns NaN when qBittorrent's maindata carries no
+      // free_space_on_disk, and `NaN < threshold` is false - so the unguarded comparison
+      // stayed silent exactly when the disk state was unknown, which is the one case the
+      // owner most needs to hear about. This is the only alert that says a release pass
+      // could not free enough, so "unknown" gets its own alert rather than no alert.
+      if (!Number.isFinite(freeAfter)) {
+        alertProblem(
+          'disk',
+          'Hebits builder: free disk space unknown',
+          'qBittorrent did not report free disk space, so the low-disk check could not run.',
+        );
+      } else if (freeAfter < (cfg.lowDiskAlertGB ?? 15) * GB) {
         alertProblem(
           'disk',
           'Hebits builder: disk almost full',
