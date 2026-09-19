@@ -2,6 +2,7 @@
 // Pure functions; the server supplies live data.
 import type { HebitsTorrent } from 'hebits-client';
 import { isDiscOrRemux, seasonInfo } from './parse';
+import { parseTags } from './tags';
 
 const GB = 1024 ** 3;
 const HOUR = 3600 * 1000;
@@ -677,6 +678,173 @@ export function stuckDownloads<T extends { hash: string; progress: number; added
 ): T[] {
   const nowSec = now / 1000;
   return torrents.filter((t) => managed.has(t.hash) && t.progress < 1 && nowSec - (t.added_on || nowSec) >= hours * 3600);
+}
+
+// --- Adoption ---------------------------------------------------------------------------
+// `managed` above is built from state.json alone, and state.json is documented as a cache
+// rather than a source of truth (see store.ts). That gap is harmless while the file is
+// intact and total when it is not: a torrent missing from it is never eligible for release,
+// so the disk fills with files the service does not believe it may touch, and the
+// completed-torrent count that steers the preset restarts near zero. A rebuilt machine
+// starts in exactly that state - qBittorrent's data directory survives, the config dir does
+// not - and nothing about it looks wrong until the disk runs out.
+//
+// What qBittorrent still knows is what grab.ts wrote there when it added the torrent: the
+// identity tags (`hebits:<id>`, and usually `imdb:tt...` - see tags.ts) and the tracker it
+// announces to. The two together are what makes a torrent adoptable back into the store.
+//
+// Deliberately on the strict side. Adopting a torrent hands the cleanup pass permission to
+// delete it with its files, so a false positive is a torrent the owner added by hand being
+// released out from under them; a false negative is a torrent that stays unmanaged, which is
+// what happens today anyway. Both identity tests must pass, and anything ambiguous is
+// reported rather than adopted.
+export const HEBITS_TRACKER_HOST = 'hebits.net';
+
+// The `hebits:` tag value grab.ts writes is always a tracker torrent id - digits. A tag with
+// anything else in it was not written by this service's buildTags() against a real id, so it
+// is not evidence of anything and does not adopt.
+const HEBITS_ID = /^\d+$/;
+
+// One announce URL host against the tracker's. Exact host or a subdomain of it, so
+// `tracker.hebits.net` matches and neither `evil-hebits.net` nor `hebits.net.example.com`
+// does. qBittorrent's tracker list also carries the pseudo-entries `** [DHT] **`,
+// `** [PeX] **` and `** [LSD] **`, which are not URLs at all - they parse as failures and
+// count as no evidence, never as a match.
+export function isHebitsTracker(urls: readonly string[], host: string = HEBITS_TRACKER_HOST): boolean {
+  // Trim before the fallback, not after: a `trackerHost` of "" or "   " in config.json is
+  // truthy-or-not trivia that would otherwise decide between the tracker's host and no host
+  // at all, and "no host at all" adopts nothing - the silent dead end this whole file exists
+  // to close. A host nobody set means the default.
+  const want = (host ?? '').trim().toLowerCase().replace(/^\.+/, '') || HEBITS_TRACKER_HOST;
+  return urls.some((raw) => {
+    let hostname: string;
+    try {
+      hostname = new URL(String(raw)).hostname.toLowerCase();
+    } catch {
+      return false;
+    }
+    return hostname === want || hostname.endsWith(`.${want}`);
+  });
+}
+
+/** The qBittorrent side of adoption. Wider than QbitTorrent: the tags carry the identity. */
+export interface AdoptableTorrent {
+  hash: string;
+  name: string;
+  tags: string;
+  size: number;
+  progress: number;
+  completion_on?: number;
+}
+
+/** The store's side of adoption. Deliberately narrower than TorrentEntry. */
+export interface AdoptableEntry {
+  hash?: string;
+  completedAt?: string;
+}
+
+/** A torrent that carries a usable Hebits id and no store entry claiming its infohash. */
+export interface AdoptionCandidate<T> {
+  hebitsId: string;
+  torrent: T;
+}
+
+/** A torrent that looked adoptable and was not adopted, with the sentence saying why. */
+export interface AdoptionSkip {
+  hebitsId: string;
+  hash: string;
+  reason: string;
+}
+
+export interface AdoptionSurvey<T> {
+  candidates: AdoptionCandidate<T>[];
+  /** Torrents whose infohash the store already holds - the steady state once converged. */
+  known: number;
+  skipped: AdoptionSkip[];
+}
+
+// The half of adoption that needs no I/O: which torrents the store has never heard of.
+// Torrents with no `hebits:` tag are not candidates and are not reported - the owner's own
+// torrents sharing this qBittorrent are the normal case, not a problem to surface.
+//
+// Idempotence lives here. A torrent whose infohash any entry already records is `known`, so
+// a second pass over the same qBittorrent produces no candidates and writes nothing; and
+// because only torrents PRESENT in qBittorrent are ever considered, an entry the cleanup
+// pass marked `removedAt` can never be resurrected by this.
+export function adoptionCandidates<T extends AdoptableTorrent>(
+  torrents: readonly T[],
+  entries: Record<string, AdoptableEntry>,
+): AdoptionSurvey<T> {
+  const recorded = new Set(
+    Object.values(entries)
+      .map((e) => e?.hash)
+      .filter((h): h is string => Boolean(h))
+      .map((h) => h.toLowerCase()),
+  );
+  const survey: AdoptionSurvey<T> = { candidates: [], known: 0, skipped: [] };
+  for (const t of torrents) {
+    const { hebitsId } = parseTags(t.tags);
+    if (hebitsId === undefined) continue;
+    if (recorded.has(String(t.hash).toLowerCase())) {
+      survey.known++;
+      continue;
+    }
+    if (!HEBITS_ID.test(hebitsId)) {
+      survey.skipped.push({ hebitsId, hash: t.hash, reason: 'its hebits tag is not a numeric torrent id' });
+      continue;
+    }
+    // The id is spoken for by a DIFFERENT infohash: the same Hebits torrent re-uploaded, a
+    // hand-edited tag, two torrents tagged alike. Overwriting would silently drop whichever
+    // entry is real, so neither is touched and the divergence is reported instead.
+    const claimed = entries[hebitsId];
+    if (claimed?.hash) {
+      survey.skipped.push({
+        hebitsId,
+        hash: t.hash,
+        reason: `hebits:${hebitsId} is already on record with a different infohash (${claimed.hash.slice(0, 8)})`,
+      });
+      continue;
+    }
+    survey.candidates.push({ hebitsId, torrent: t });
+  }
+  return survey;
+}
+
+// What an adopted torrent is worth writing down. Only fields qBittorrent can actually
+// evidence: the infohash and name (the same values grab.ts takes from the .torrent), the
+// size on disk, and the IMDb id if the tag carries one. `title`, `cover`, `fileCount`,
+// `files`, `pieceLength` and `auto` came from the tracker listing or the .torrent file and
+// are not recoverable here - they are left absent rather than guessed, which is also what
+// keeps them recoverable later: grab.ts's putTorrent merges, so a real grab still fills them.
+//
+// `completedAt` is the one that has to be right. It is what keeps the rank ladder's
+// completed count from falling when cleanup releases the files, so it is taken from
+// qBittorrent's own `completion_on` rather than stamped "now" - the true completion time,
+// which for a machine rebuild is months before adoption ran. A missing, zero or
+// still-in-the-future value (qBittorrent uses sentinels for "not completed") falls back to
+// `now`, and an entry that already carries a stamp keeps it: the count may never move
+// backwards. See countCompleted().
+export function adoptedEntry(
+  t: AdoptableTorrent,
+  now: Date,
+  existing?: AdoptableEntry,
+): { hash: string; name: string; size: number; imdb?: string; completedAt?: string } {
+  const entry: { hash: string; name: string; size: number; imdb?: string; completedAt?: string } = {
+    // Stored exactly as qBittorrent spells it (lower-case hex), because cleanupTick matches
+    // `managed` against t.hash with ===, not case-insensitively.
+    hash: t.hash,
+    name: t.name,
+    size: t.size,
+  };
+  const { imdb } = parseTags(t.tags);
+  if (imdb) entry.imdb = imdb;
+  if (existing?.completedAt) {
+    entry.completedAt = existing.completedAt;
+  } else if (t.progress >= 1) {
+    const ms = (t.completion_on ?? 0) * 1000;
+    entry.completedAt = new Date(ms > 0 && ms <= now.getTime() ? ms : now.getTime()).toISOString();
+  }
+  return entry;
 }
 
 // Season packs etc. are fine to farm; this is only used for log text.

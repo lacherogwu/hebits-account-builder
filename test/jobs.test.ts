@@ -1,7 +1,10 @@
 import { ApiError, LoginExpiredError } from 'hebits-client';
 import { expect, test, vi } from 'vitest';
+import { countCompleted } from '../src/farm';
 import type { EnsureTorrent, JobsConfig, JobsHebits, JobsNotifier, JobsQBit, JobsStore, MakeJobsDeps } from '../src/jobs';
 import { makeJobs } from '../src/jobs';
+import type { Torrent } from '../src/qbit';
+import type { TorrentEntry } from '../src/store';
 
 // Fakes only - nothing here touches the network, a real qBittorrent, or the filesystem.
 // JobsStore is narrow specifically so this fake never calls a real Store.putTorrent, which
@@ -46,6 +49,9 @@ function deps(
     all: vi.fn().mockResolvedValue([]),
     freeSpace: vi.fn().mockResolvedValue(500 * 1024 ** 3),
     remove: vi.fn().mockResolvedValue(undefined),
+    // The Hebits announce URL, so a fixture only has to carry a `hebits:` tag to be
+    // adoptable. Tests about the tracker half of the identity check override it.
+    trackers: vi.fn().mockResolvedValue([{ url: 'https://tracker.hebits.net/announce' }]),
     ...over.qbit,
   };
   const notifier: JobsNotifier = {
@@ -309,4 +315,217 @@ test('an unreadable qBittorrent list costs the count, not the grab', async () =>
   // failed would be strictly worse than a tick that grabs with one dimension unknown.
   expect(ensureTorrent).toHaveBeenCalledTimes(1);
   expect(log.mock.calls.map((c) => String(c[0])).some((m) => m.includes('torrent list could not be read'))).toBe(true);
+});
+
+// --- Adoption ------------------------------------------------------------------------------
+// state.json is the only record of which torrents this service may release, and it is not
+// derivable from anything else - so a machine rebuild that keeps qBittorrent's data and loses
+// the config dir leaves a service that can never free a byte, while looking healthy. These
+// cover the rule that closes that, and the end-to-end property that is the actual bug.
+
+// A store fake that actually stores, because these tests assert what the store CONTAINS after
+// a tick - not that putTorrent was called. It merges the way the real Store.putTorrent does,
+// without its save() touching the filesystem.
+function liveStore(torrents: Record<string, TorrentEntry> = {}): JobsStore {
+  const data = { torrents, farmLog: [] as { action: string; text: string; at: string }[] };
+  return {
+    data,
+    putTorrent(hebitsId, entry) {
+      data.torrents[hebitsId] = { ...data.torrents[hebitsId], ...entry };
+    },
+    noteRank: vi.fn(),
+  };
+}
+
+// A finished Hebits torrent as qBittorrent reports it: seeded well past minSeedDays, plenty of
+// seeders, in the auto-seed category, tagged by whichever service added it.
+const seeding = (over: Partial<Torrent> = {}): Torrent =>
+  ({
+    hash: 'aaa',
+    name: 'Some.Pack.2026.1080p.WEB-DL',
+    tags: 'hebits:4242, imdb:tt1234567',
+    size: 60 * GB,
+    progress: 1,
+    state: 'uploading',
+    category: 'seed-auto',
+    seeding_time: 20 * 86400,
+    completion_on: Math.floor(Date.UTC(2026, 2, 1) / 1000),
+    added_on: Math.floor(Date.UTC(2026, 1, 20) / 1000),
+    num_complete: 10,
+    num_incomplete: 0,
+    ratio: 1.2,
+    save_path: '/seed',
+    ...over,
+  }) as Torrent;
+
+// The rebuilt-machine fixture: an empty store, a qBittorrent full of Hebits torrents, and a
+// disk with 5 GB left - under both the 40 GB reserve and the 10 GB emergency line.
+const rebuilt = (torrents: Torrent[], over: Parameters<typeof deps>[0] = {}): MakeJobsDeps =>
+  deps({
+    ...over,
+    store: over.store ?? liveStore(),
+    // Merged, not replaced: an override that only cares about `trackers` must not quietly
+    // take the empty default torrent list with it and turn the test into a no-op.
+    qbit: { all: vi.fn().mockResolvedValue(torrents), freeSpace: vi.fn().mockResolvedValue(5 * GB), ...over.qbit },
+  });
+
+const threeSeeds = (): Torrent[] => [
+  seeding({ hash: 'aaa', tags: 'hebits:1, imdb:tt1234567', num_complete: 40 }),
+  seeding({ hash: 'bbb', tags: 'hebits:2', num_complete: 10 }),
+  seeding({ hash: 'ccc', tags: 'hebits:3', num_complete: 6 }),
+];
+
+test('a rebuilt machine: an empty store plus a populated qBittorrent ends with those torrents releasable', async () => {
+  // THE bug. Nothing else here matters if this passes for the wrong reason, so it asserts the
+  // whole chain by its post-state: the store learns the torrents, and the release pass - which
+  // reads `managed` from that store - actually deletes one.
+  const d = rebuilt(threeSeeds());
+  const { cleanupTick } = makeJobs(d);
+  await cleanupTick();
+
+  expect(Object.keys(d.store.data.torrents).sort()).toEqual(['1', '2', '3']);
+  expect(d.store.data.torrents['1']).toMatchObject({ hash: 'aaa', name: 'Some.Pack.2026.1080p.WEB-DL', imdb: 'tt1234567' });
+  expect(d.store.data.torrents['1']?.completedAt).toBe('2026-03-01T00:00:00.000Z');
+  // 5 GB free, 60 GB torrents, a 50 GB target: exactly one release, and the cheapest per GB
+  // (most seeders, so the fewest bonus points to lose) is the one that goes.
+  const removed = (d.qbit.remove as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0]);
+  expect(removed).toEqual(['aaa']);
+});
+
+test('the same disk pressure frees nothing when the torrents carry no hebits tag', async () => {
+  // The control that makes the test above mean something: identical fixture, identical
+  // pressure, one field different. Without it, "one torrent was released" could equally be a
+  // cleanup pass that ignores `managed` altogether and deletes whatever qBittorrent holds -
+  // which is the failure that would cost the owner someone else's torrents.
+  const d = rebuilt(threeSeeds().map((t) => ({ ...t, tags: 'imdb:tt1234567' })));
+  const { cleanupTick } = makeJobs(d);
+  await cleanupTick();
+  expect(d.store.data.torrents).toEqual({});
+  expect(d.qbit.remove).not.toHaveBeenCalled();
+});
+
+test('a tagged torrent that does not announce to the tracker is left alone, and says so', async () => {
+  const d = rebuilt(threeSeeds(), {
+    qbit: { trackers: vi.fn().mockResolvedValue([{ url: 'https://tracker.example.invalid/announce' }]) },
+  });
+  const { cleanupTick, adoption } = makeJobs(d);
+  await cleanupTick();
+  expect(d.store.data.torrents).toEqual({});
+  expect(d.qbit.remove).not.toHaveBeenCalled();
+  expect(adoption.skipped.map((s) => s.reason)).toEqual(Array(3).fill('it does not announce to hebits.net'));
+  // The one skip reason that is a misconfiguration: silently, it reproduces the exact bug
+  // adoption exists to fix, so it has to reach the owner.
+  const kinds = (d.notifier.send as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0]);
+  expect(kinds).toContain('adopt-tracker');
+});
+
+test('a torrent tagged with something that is not a torrent id is not adopted', async () => {
+  const d = rebuilt([seeding({ tags: 'hebits:latest' })]);
+  const { cleanupTick, adoption } = makeJobs(d);
+  await cleanupTick();
+  expect(d.store.data.torrents).toEqual({});
+  expect(d.qbit.remove).not.toHaveBeenCalled();
+  expect(adoption.skipped[0]?.reason).toBe('its hebits tag is not a numeric torrent id');
+});
+
+test('adoption is idempotent: a second pass adopts nothing and asks the tracker nothing', async () => {
+  const d = rebuilt(threeSeeds());
+  const { adoptTick, adoption } = makeJobs(d);
+  await adoptTick();
+  const afterFirst = structuredClone(d.store.data.torrents);
+  expect(adoption.adopted).toBe(3);
+
+  await adoptTick();
+  expect(d.store.data.torrents).toEqual(afterFirst);
+  expect(adoption.adopted).toBe(3);
+  expect(adoption.lastAdopted).toEqual([]);
+  // A converged machine reports nothing at all. Recognising an already-adopted torrent by the
+  // infohash on record is what makes that true; matching it by id alone would leave every one
+  // of them on /status forever as "already on record with a different infohash".
+  expect(adoption.skipped).toEqual([]);
+  // Once converged the pass costs nothing: every torrent's infohash is already on record, so
+  // there is no candidate to check a tracker for.
+  expect((d.qbit.trackers as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(3);
+});
+
+test('adoption never moves a completion stamp backwards', async () => {
+  // An entry that knows the torrent finished in January, and a qBittorrent that has been
+  // re-checked since and reports March. The rank ladder counts torrents the tracker considers
+  // downloaded in full and never lowers that count, so neither may this.
+  const d = rebuilt([seeding({ hash: 'aaa', tags: 'hebits:1', completion_on: Math.floor(Date.UTC(2026, 2, 1) / 1000) })]);
+  d.store.data.torrents['1'] = { completedAt: '2026-01-05T00:00:00.000Z' };
+  const { adoptTick } = makeJobs(d);
+  await adoptTick();
+  expect(d.store.data.torrents['1']).toMatchObject({ hash: 'aaa', completedAt: '2026-01-05T00:00:00.000Z' });
+});
+
+test('adoption does not resurrect a torrent the owner removed from qBittorrent', async () => {
+  const released: Record<string, TorrentEntry> = {
+    '7': { hash: 'ddd', name: 'Gone.For.Good', removedAt: '2026-05-01T00:00:00.000Z' },
+  };
+  const d = deps({
+    store: liveStore(released),
+    qbit: { all: vi.fn().mockResolvedValue([seeding({ hash: 'eee', tags: '' })]), freeSpace: vi.fn().mockResolvedValue(5 * GB) },
+  });
+  const { adoptTick } = makeJobs(d);
+  await adoptTick();
+  expect(d.store.data.torrents).toEqual(released);
+});
+
+test('adopted torrents count toward the completed-torrent total', async () => {
+  // The second half of the rebuild problem: the count that steers the preset restarts near
+  // zero on a fresh state.json, which over-prioritises count-first. Asserted through the real
+  // tally function rather than by inspecting fields.
+  const all = threeSeeds();
+  const d = rebuilt(all);
+  const { adoptTick } = makeJobs(d);
+  await adoptTick();
+  expect(countCompleted(d.store.data.torrents, all)?.count).toBe(3);
+  // ...and it survives the files being released, which is the whole point of the stamp.
+  expect(countCompleted(d.store.data.torrents, [])?.count).toBe(3);
+});
+
+test('one unreadable tracker list costs one torrent, not the pass', async () => {
+  const trackers = vi
+    .fn()
+    .mockRejectedValueOnce(new Error('HTTP 500'))
+    .mockResolvedValue([{ url: 'https://tracker.hebits.net/announce' }]);
+  const d = rebuilt(threeSeeds(), { qbit: { trackers } });
+  const { adoptTick, adoption } = makeJobs(d);
+  await adoptTick();
+  expect(Object.keys(d.store.data.torrents).sort()).toEqual(['2', '3']);
+  expect(adoption.skipped[0]?.reason).toContain('HTTP 500');
+  expect(adoption.error).toBeNull();
+});
+
+test('a qBittorrent that cannot be read degrades the pass instead of throwing out of it', async () => {
+  // adoptTick runs inside cleanupTick, ahead of the release decision. If it threw, a
+  // qBittorrent hiccup would cost the release pass rather than the adoptions.
+  const d = deps({ store: liveStore(), qbit: { all: vi.fn().mockRejectedValue(new Error('ECONNREFUSED')) } });
+  const { adoptTick, adoption } = makeJobs(d);
+  await expect(adoptTick()).resolves.toBeUndefined();
+  expect(adoption.error).toBe('ECONNREFUSED');
+  expect(adoption.checkedAt).toEqual(expect.any(String));
+});
+
+test('an adoption is written to the farm log, where /status shows it', async () => {
+  const farmLog = vi.fn();
+  const d = rebuilt([seeding({ hash: 'aaa', tags: 'hebits:1' })], { farmLog });
+  const { adoptTick } = makeJobs(d);
+  await adoptTick();
+  const entry = farmLog.mock.calls.find((c: unknown[]) => c[0] === 'adopt');
+  expect(entry?.[1]).toContain('hebits 1');
+});
+
+test('a very large backlog is adopted across passes rather than in one burst', async () => {
+  // One tracker call per candidate, so the first pass on a machine holding hundreds of
+  // torrents is capped. The cap must only defer work: what it leaves behind is adopted next
+  // pass, which is the difference between a bound and a ceiling.
+  const many = Array.from({ length: 60 }, (_, i) => seeding({ hash: `hash${i}`, tags: `hebits:${i}` }));
+  const d = rebuilt(many);
+  const { adoptTick } = makeJobs(d);
+  await adoptTick();
+  expect(Object.keys(d.store.data.torrents)).toHaveLength(50);
+  await adoptTick();
+  expect(Object.keys(d.store.data.torrents)).toHaveLength(60);
 });

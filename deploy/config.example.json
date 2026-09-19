@@ -7,6 +7,7 @@
   "watchPath": "/home/you/hebits/watch",
   "seedCategory": "seed-auto",
   "seedPath": "/home/you/hebits/seed",
+  "trackerHost": "hebits.net",
   "timezone": "Asia/Jerusalem",
   "dailyLimit": 0,
   "minFreeGB": 20,

@@ -54,6 +54,7 @@ environment variable. See `deploy/config.example.json` for a starting point.
 | `qbitUsername`, `qbitPassword` | empty | Only needed if qBittorrent's "bypass authentication for clients on localhost" is off |
 | `watchCategory`, `watchPath` | `watch`, `~/hebits/watch` | Category/path for torrents grabbed on demand (for a companion streaming addon) |
 | `seedCategory`, `seedPath` | `seed-auto`, `~/hebits/seed` | Category/path for torrents auto-grabbed to build the account |
+| `trackerHost` | `hebits.net` | The tracker host a torrent must announce to before it can be [adopted](#adoption). Only worth changing if the tracker's announce domain moves; a wrong value means nothing is ever adopted, which `/status` reports and an alert names |
 | `farm` | `{"enabled": true, "intervalMin": 10}` | Auto-grab job; see `GRAB_DEFAULTS` in `src/farm.ts` for tuning knobs (`keepForUser`, `reserveGB`, `maxSizeGB`, …) and [Rank targets and presets](#rank-targets-and-presets) for `targetRank`, `preset` and `weights` |
 | `cleanup` | `{"enabled": true, "intervalMin": 30}` | Auto-release job; see `CLEANUP_DEFAULTS` in `src/farm.ts` (`reserveGB`, `minSeedDays`, `keepIfSeedersBelow`, …) |
 | `notify` | `{"webhookUrl": ""}` | Alert transport; see [Notifications](#notifications) |
@@ -76,8 +77,10 @@ unknown route — the token isn't revealed by the response.
   `ratio 1.51/1.5 ✓, volume 10.4/75 GB, torrents ≥12/50`), today's download count, Hebits
   login health, free disk space, the last 20 grab/release/error events, and the torrents
   currently managed. It also reports anything that went wrong at startup: `configIssues`
-  (settings that failed validation and fell back to their default) and `storeIssue` (a
-  `state.json` that had to be moved aside). Every reading
+  (settings that failed validation and fell back to their default), `storeIssue` (a
+  `state.json` that had to be moved aside) and `adoption` (which torrents already in
+  qBittorrent the builder has taken over, and which tagged ones it declined to and why — see
+  [Adoption](#adoption)). Every reading
   degrades on its own, so this page still answers when Hebits or qBittorrent is unreachable —
   `freeGB` is `null` when qBittorrent did not answer, not `0`.
 - **`/cookie`** — GET returns a form to paste a fresh Hebits login cookie; POST verifies it
@@ -104,6 +107,48 @@ it: `hebits:<id>` and, when known, `imdb:tt<id>`. A `.torrent` file itself carri
 these tags are the only record. A separate tool reading qBittorrent (such as a companion
 Stremio addon sharing the same instance) can use them to recognize torrents this service
 added and match them to an IMDb id, without either service depending on the other.
+
+## Adoption
+
+`state.json` is a cache, not a source of truth — except in one place: the release job will only
+ever delete a torrent that the store records, and nothing else on the machine says which those
+are. Restore a Mac from scratch, keep the qBittorrent data directory and lose the config
+directory, and the result is a service that grabs, never frees a byte, and looks healthy until
+the disk is full about a week later.
+
+Adoption closes that. Every 30 minutes — and again at the top of each release pass, before it
+decides anything — the builder looks for torrents qBittorrent is holding that its own index has
+never heard of, and takes over the ones it can prove are its business. A torrent is adoptable
+only if **both** hold:
+
+- it carries a `hebits:<id>` tag whose value is a torrent id (digits) — see [Tags](#tags); and
+- its announce list contains a URL whose host is `trackerHost`, or a subdomain of it.
+
+That is deliberately strict, because adopting a torrent is what gives the release job
+permission to delete it with its files. A torrent wrongly adopted is the owner's own download
+disappearing; a torrent wrongly left alone is just a torrent the builder does not manage, which
+is the status quo. So anything ambiguous — a `hebits:` tag that isn't an id, an id already on
+record against a different infohash, a tracker list that couldn't be read — is reported on
+`/status` rather than adopted, and torrents with no `hebits:` tag at all (the owner's own,
+sharing the same qBittorrent) are neither adopted nor reported.
+
+An adopted entry records only what qBittorrent can evidence: the infohash, the torrent name,
+the size on disk, the IMDb id if the tag carries one, and `completedAt` taken from
+qBittorrent's own completion time — not from the moment adoption ran, which on a rebuilt
+machine would date every torrent to the rebuild. An existing `completedAt` is never moved. The
+fields that came from the tracker listing or the `.torrent` file (`title`, `cover`,
+`fileCount`, `files`, `pieceLength`, and whether the grab was automatic) are left absent rather
+than guessed; a later real grab fills them in.
+
+Running it repeatedly changes nothing: a torrent whose infohash any entry already holds is
+recognised, so a converged machine makes no tracker calls and writes nothing. And because only
+torrents *present* in qBittorrent are ever considered, an entry the release job marked
+`removedAt` can never come back.
+
+It runs as a tick rather than once at startup on purpose. The service runs under launchd with
+`KeepAlive`, so anything that throws before the notifier exists is a silent restart loop, and
+the one thing adoption depends on is a local qBittorrent — which on a machine that just
+rebooted is down for a minute or two. A tick converges instead of getting a single chance.
 
 ## Rank targets and presets
 
@@ -172,7 +217,9 @@ reports it: `hebits-client`'s account stats carry uploaded, downloaded, ratio, r
 and class, and no snatch count. What is counted instead is torrents this service has *observed*
 at 100% — from qBittorrent, plus a `completedAt` stamp kept in `state.json` so releasing a
 torrent does not un-count it. Torrents grabbed by hand, or completed before this service (or
-this `state.json`) existed, are invisible to it, so the real number can only be higher. A count
+this `state.json`) existed, are invisible to it — except where [adoption](#adoption) can
+recover them, which it does for any tagged Hebits torrent still in qBittorrent. The real number
+can only be higher. A count
 with no basis at all is reported as `unknown` rather than as `0`, because a zero would steer
 every decision at a dimension nobody measured.
 
@@ -193,6 +240,9 @@ every decision at a dimension nobody measured.
     Titles in the `watch` category also need ≥ 14 days since completion.
   - Lowest bonus points per GB go first, until 50 GB is free.
   - Below 10 GB free, rare torrents may go too.
+- **Adopt** (every 30 min, and before every release pass): takes over torrents already in
+  qBittorrent that carry a `hebits:<id>` tag and announce to `trackerHost`, so a rebuilt
+  machine can release them again. See [Adoption](#adoption).
 - **Stuck downloads**: a managed torrent still unfinished after 24 h triggers an alert.
 - **Points formula**:
   `Size × (0.2 + 0.4·ln(1+months)) / ln(2 + seeders^0.7)` per hour, per torrent.
@@ -210,9 +260,9 @@ every decision at a dimension nobody measured.
 
 | File | Purpose |
 |---|---|
-| `src/server.ts` | HTTP server: routing, token auth, startup wiring, log rotation, schedules the two jobs |
+| `src/server.ts` | HTTP server: routing, token auth, startup wiring, log rotation, schedules the background jobs |
 | `src/config.ts` | Loads/saves `config.json` and owns the Hebits cookie file |
-| `src/jobs.ts` | The two background jobs (`farmTick`, `cleanupTick`) and login/service health tracking |
+| `src/jobs.ts` | The background jobs (`farmTick`, `cleanupTick`, `adoptTick`) and login/service health tracking |
 | `src/farm.ts` | Account-building policy: pure functions deciding what to grab and what to release |
 | `src/grab.ts` | Turns a Hebits id into a running qBittorrent torrent: download, add, tag |
 | `src/qbit.ts` | qBittorrent WebUI API client |
@@ -223,8 +273,10 @@ every decision at a dimension nobody measured.
 | `src/parse.ts` | Release-name parsing: disc/remux detection, season/episode info |
 | `src/bencode.ts` | Minimal bencode reader for `.torrent` files (infohash, name, files, piece length) |
 
-`test/` mirrors `src/` one-to-one (one `*.test.ts` per module), plus `test/factory.ts` for
-shared test fixtures and `test/bundle.test.ts`, which tests the built artifact rather than a
+`test/` mirrors `src/` one file per module, except that `src/farm.ts` — which holds three
+separate policies — is covered by `farm.test.ts` (what to grab and release), `ranks.test.ts`
+(the rank ladder and presets) and `adopt.test.ts` (what may be adopted). Plus `test/factory.ts`
+for shared fixtures and `test/bundle.test.ts`, which tests the built artifact rather than a
 module (see [Tests](#tests)).
 
 ## Dependencies

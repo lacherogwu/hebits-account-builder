@@ -65,7 +65,8 @@ function rawGet(port: number, path: string): Promise<RawResponse> {
 // a port nothing listens on. notify's webhook is '' by default; spelled out so isolation
 // doesn't depend on that staying true. Both jobs off: a farm tick would talk to hebits.net -
 // it is 60s away and these suites finish long before, but "no network" should not rest on a
-// race being won.
+// race being won. The adoption tick has no enabled flag (it only reads qBittorrent and writes
+// the local index), so the dead qbitUrl - not a config switch - is what holds for it.
 const throwawayConfig = (port: number): string =>
   JSON.stringify({
     port,

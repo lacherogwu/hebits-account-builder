@@ -499,3 +499,33 @@ test('per-dimension weights survive when valid and fall back whole when not', as
   expect((cfg.farm as Record<string, unknown>).maxPerRun).toBe(1);
   expect(cfg.configIssues.some((m) => m.includes('farm.weights'))).toBe(true);
 });
+
+// --- Adoption -------------------------------------------------------------------------------
+// `trackerHost` is half of the test that decides whether a torrent already in qBittorrent may
+// be adopted - and so whether the cleanup pass may ever delete it. config.ts spells the default
+// out itself rather than importing farm.ts (see grabOptionsShape's comment); this is what keeps
+// the two copies equal.
+
+test('the default trackerHost is the tracker the policy checks against', async () => {
+  const { HEBITS_TRACKER_HOST } = await import('../src/farm');
+  const { loadConfig } = await import('../src/config');
+  const cfg = loadConfig();
+  expect(cfg.trackerHost).toBe(HEBITS_TRACKER_HOST);
+  expect(cfg.configIssues).toEqual([]);
+});
+
+test('a trackerHost of the wrong type falls back to the default and is reported', async () => {
+  // Left unvalidated, `cfg.trackerHost?.trim()` in adoptTick throws on every pass - which,
+  // inside cleanupTick, is the release job failing on a config typo.
+  writeConfig({ trackerHost: 1234 });
+  const { loadConfig } = await import('../src/config');
+  const cfg = loadConfig();
+  expect(cfg.trackerHost).toBe('hebits.net');
+  expect(cfg.configIssues.join('\n')).toContain('"trackerHost" is a number');
+});
+
+test('a custom trackerHost is honoured', async () => {
+  writeConfig({ trackerHost: 'tracker.example.test' });
+  const { loadConfig } = await import('../src/config');
+  expect(loadConfig().trackerHost).toBe('tracker.example.test');
+});

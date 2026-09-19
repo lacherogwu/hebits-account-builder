@@ -35,6 +35,11 @@ export interface Config {
   watchPath: string;
   seedCategory: string;
   seedPath: string;
+  // The tracker host a torrent must announce to before the builder will adopt it into its
+  // own index - the second half of the identity check, next to the `hebits:<id>` tag. Only
+  // worth touching if the tracker's announce domain ever moves; a wrong value here means
+  // nothing is ever adopted, which /status reports and the `adopt-tracker` alert names.
+  trackerHost: string;
   // Account building. Both are passed to the policy whole as `opts`, so the whole knob set
   // (see GRAB_DEFAULTS / CLEANUP_DEFAULTS in farm.ts) is settable here alongside the schedule.
   farm: GrabOptions;
@@ -70,6 +75,7 @@ const DEFAULTS: Omit<Config, 'token' | 'configIssues'> = {
   watchPath: join(HOME, 'hebits', 'watch'),
   seedCategory: 'seed-auto',
   seedPath: join(HOME, 'hebits', 'seed'),
+  trackerHost: 'hebits.net', // asserted equal to farm.ts's HEBITS_TRACKER_HOST by a test
   farm: { enabled: true, intervalMin: 10 },
   cleanup: { enabled: true, intervalMin: 30 },
   notify: { webhookUrl: '' },
@@ -184,6 +190,7 @@ const fieldSchemas: Record<string, z.ZodType> = {
   watchPath: z.string(),
   seedCategory: z.string(),
   seedPath: z.string(),
+  trackerHost: z.string(),
   lowDiskAlertGB: z.number(),
   torrentDir: z.string(),
   logFile: z.string(),

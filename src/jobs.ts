@@ -2,8 +2,21 @@
 import { networkInterfaces } from 'node:os';
 import type { BrowseOptions, HebitsTorrent } from 'hebits-client';
 import { ApiError, HebitsError, LoginExpiredError, RateLimitedError } from 'hebits-client';
-import type { CleanupOptions, GrabOptions } from './farm';
-import { countCompleted, describe, newlyCompleted, pickGrabs, pickRemovals, rankProgress, resolveWeights, stuckDownloads } from './farm';
+import type { AdoptionSkip, CleanupOptions, GrabOptions } from './farm';
+import {
+  adoptedEntry,
+  adoptionCandidates,
+  countCompleted,
+  describe,
+  HEBITS_TRACKER_HOST,
+  isHebitsTracker,
+  newlyCompleted,
+  pickGrabs,
+  pickRemovals,
+  rankProgress,
+  resolveWeights,
+  stuckDownloads,
+} from './farm';
 import type { EnsureTorrentOptions } from './grab';
 import type { SendOptions } from './notify';
 import type { Torrent } from './qbit';
@@ -23,6 +36,8 @@ export interface JobsConfig {
   port: number;
   token: string;
   lowDiskAlertGB?: number;
+  // The tracker host an adoptable torrent must announce to. See adoptTick.
+  trackerHost?: string;
 }
 
 // The slice of hebits-client's Hebits the jobs read.
@@ -37,6 +52,7 @@ export interface JobsQBit {
   all(): Promise<Torrent[]>;
   freeSpace(): Promise<number>;
   remove(hash: string): Promise<unknown>;
+  trackers(hash: string): Promise<{ url: string }[]>;
 }
 
 // The slice of Notifier the jobs read.
@@ -64,6 +80,21 @@ export type EnsureTorrent = (
   options?: EnsureTorrentOptions,
 ) => Promise<TorrentEntry | undefined>;
 
+// What the last adoption pass did, for /status. Adoption changes which torrents the cleanup
+// job is allowed to delete, so it is not something that should only ever happen in a log
+// line nobody was tailing - it sits beside configIssues and storeIssue.
+export interface Adoption {
+  checkedAt: string | null;
+  /** Adopted since this process started. */
+  adopted: number;
+  /** What the last pass adopted, and what the last pass declined to adopt and why. Both are
+   *  the state as of `checkedAt`, not a running log - the farm log keeps the history. */
+  lastAdopted: { hebitsId: string; name: string }[];
+  skipped: AdoptionSkip[];
+  /** Why the last pass could not run at all (qBittorrent unreachable, typically). */
+  error: string | null;
+}
+
 export interface Health {
   hebitsLogin: 'unknown' | 'ok' | 'failing';
   checkedAt: string | null;
@@ -84,7 +115,11 @@ export interface MakeJobsDeps {
 export interface Jobs {
   farmTick: () => Promise<void>;
   cleanupTick: () => Promise<void>;
+  // `torrents` lets cleanupTick reuse the list it has already fetched; called with nothing
+  // (from its own timer) it fetches its own.
+  adoptTick: (torrents?: Torrent[]) => Promise<void>;
   health: Health;
+  adoption: Adoption;
   // Exposed so the cookie page can report a successful save immediately, instead of the
   // status only catching up on the next scheduled farmTick (up to cfg.farm.intervalMin
   // later). The `was === 'failing'` guard inside stays untouched either way.
@@ -231,17 +266,110 @@ export function makeJobs({ cfg, store, hebits, qbit, notifier, ensureTorrent, fa
     }
   }
 
+  // --- Adoption -------------------------------------------------------------------------
+  // Puts torrents qBittorrent is already holding back into the store, so the cleanup pass can
+  // see them. See the block comment above adoptionCandidates() in farm.ts for why this has to
+  // exist at all and why it is strict.
+  //
+  // WHERE IT RUNS, and why not at startup. The obvious place is once at boot, and that is the
+  // one place it must not be: this service runs under launchd with KeepAlive, so anything that
+  // throws before the Notifier exists is a silent ten-second restart loop - the exact failure
+  // the config and store hardening exists to prevent - and the single thing adoption depends
+  // on is a local qBittorrent, which is down for minutes at a time on a machine that has just
+  // rebooted. A one-shot at boot would then either take the process with it or, guarded, run
+  // exactly once at the only moment it was guaranteed to fail and never again. So it is a tick:
+  // it converges instead of getting one chance, and a qBittorrent that comes back an hour later
+  // is adopted an hour later with nobody involved. cleanupTick calls it with the torrent list
+  // it has already fetched, which makes the ordering explicit - nothing is released in a pass
+  // whose store this pass could have corrected - and its own timer covers `cleanup.enabled`
+  // being off, where the completed-torrent count still depends on it.
+  //
+  // Bounded on purpose: one trackers() call per candidate, and candidates are by definition
+  // torrents that are not in the store yet, so a converged machine makes zero calls per pass.
+  const MAX_PER_PASS = 50;
+  const adoption: Adoption = { checkedAt: null, adopted: 0, lastAdopted: [], skipped: [], error: null };
+  let adoptBusy = false;
+  async function adoptTick(torrents?: Torrent[]): Promise<void> {
+    if (adoptBusy) return;
+    adoptBusy = true;
+    try {
+      const all = torrents ?? (await qbit.all());
+      const survey = adoptionCandidates(all, store.data.torrents);
+      const host = cfg.trackerHost?.trim() || HEBITS_TRACKER_HOST;
+      const skipped: AdoptionSkip[] = [...survey.skipped];
+      const lastAdopted: { hebitsId: string; name: string }[] = [];
+      let wrongTracker = 0;
+      for (const { hebitsId, torrent } of survey.candidates.slice(0, MAX_PER_PASS)) {
+        let urls: string[];
+        try {
+          urls = (await qbit.trackers(torrent.hash)).map((t) => t.url);
+        } catch (e) {
+          // Identity unproven, so no adoption - but not a divergence either, so it is reported
+          // and retried next pass rather than alerted on.
+          skipped.push({ hebitsId, hash: torrent.hash, reason: `its tracker list could not be read (${(e as Error).message})` });
+          continue;
+        }
+        if (!isHebitsTracker(urls, host)) {
+          wrongTracker++;
+          skipped.push({ hebitsId, hash: torrent.hash, reason: `it does not announce to ${host}` });
+          continue;
+        }
+        store.putTorrent(hebitsId, adoptedEntry(torrent, new Date(), store.data.torrents[hebitsId]));
+        lastAdopted.push({ hebitsId, name: torrent.name });
+        farmLog(
+          'adopt',
+          `${torrent.name} (hebits ${hebitsId}) was already in qBittorrent - now managed, so it can be released when the disk fills`,
+        );
+      }
+      Object.assign(adoption, {
+        checkedAt: new Date().toISOString(),
+        adopted: adoption.adopted + lastAdopted.length,
+        lastAdopted,
+        skipped,
+        error: null,
+      });
+      if (lastAdopted.length || skipped.length)
+        log(
+          `adopt: ${lastAdopted.length} adopted, ${skipped.length} left alone, ${survey.known} already managed of ${all.length} in qBittorrent`,
+        );
+      // The one skip reason that is a misconfiguration rather than an oddity, and the one that
+      // silently reproduces the bug adoption exists to fix: every tagged torrent left unmanaged,
+      // a disk that fills anyway, and a /status page that looks healthy. A wrong `trackerHost`
+      // is the likely cause and only the owner can fix it, so it gets an alert and not just a
+      // line on a page nobody is looking at.
+      if (wrongTracker)
+        alertProblem(
+          'adopt-tracker',
+          'Hebits builder: tagged torrents left unmanaged',
+          `${wrongTracker} torrent(s) in qBittorrent carry a hebits tag but do not announce to ${host}, so they can never be released. Check "trackerHost" in config.json.`,
+        );
+    } catch (e) {
+      // Never rethrow: cleanupTick awaits this before deciding what to release, and a
+      // qBittorrent hiccup here must cost the store an update, not the release pass.
+      adoption.error = (e as Error).message;
+      adoption.checkedAt = new Date().toISOString();
+      log(`adopt: ${adoption.error}`);
+    } finally {
+      adoptBusy = false;
+    }
+  }
+
   let cleanupBusy = false;
   async function cleanupTick(): Promise<void> {
     if (cleanupBusy || !cfg.cleanup?.enabled) return;
     cleanupBusy = true;
     try {
+      const all = await qbit.all();
+      // Before `managed` is built from it: a torrent qBittorrent is holding that the store has
+      // never heard of is not releasable, and on a rebuilt machine that is every torrent there
+      // is. adoptTick never throws, so a failure here costs this pass its adoptions and not the
+      // release it was called ahead of.
+      await adoptTick(all);
       const managed = new Set(
         Object.values(store.data.torrents)
           .map((t) => t.hash)
           .filter((h): h is string => Boolean(h)),
       );
-      const all = await qbit.all();
       const freeBytes = await qbit.freeSpace();
       if (!Number.isFinite(freeBytes)) throw new Error('qBittorrent returned a non-numeric free space value');
       // Before anything is released: a torrent that reached 100% counts toward the rank
@@ -315,5 +443,5 @@ export function makeJobs({ cfg, store, hebits, qbit, notifier, ensureTorrent, fa
     }
   }
 
-  return { farmTick, cleanupTick, health, noteLogin };
+  return { farmTick, cleanupTick, adoptTick, health, adoption, noteLogin };
 }

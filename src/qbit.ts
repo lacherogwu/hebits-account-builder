@@ -27,6 +27,12 @@ export interface Torrent {
 
 export type Category = { name: string; savePath: string };
 
+// A torrents/trackers entry. Only the URL is read; qBittorrent also returns status, tier,
+// peer counts and a message.
+export interface Tracker {
+  url: string;
+}
+
 interface MainData {
   server_state?: { free_space_on_disk?: number };
 }
@@ -113,6 +119,19 @@ export class QBit {
 
   all(): Promise<Torrent[]> {
     return this.call<Torrent[]>('torrents/info');
+  }
+
+  // The full announce list for one torrent, used to confirm a torrent really is a Hebits one
+  // before the builder adopts it (see adoptTick in jobs.ts). torrents/info carries a single
+  // `tracker` field instead, but it holds only the first tracker with WORKING status and is
+  // an empty string for anything paused, stalled or between announces - which would make a
+  // torrent's identity depend on whether it happened to be talking to the tracker just then.
+  // This endpoint answers from the torrent's own metadata, so it does not.
+  //
+  // Includes qBittorrent's pseudo-entries (`** [DHT] **`, `** [PeX] **`, `** [LSD] **`);
+  // isHebitsTracker() in farm.ts is what discards them.
+  trackers(hash: string): Promise<Tracker[]> {
+    return this.call<Tracker[]>('torrents/trackers', { params: { hash } });
   }
 
   remove(hash: string): Promise<unknown> {

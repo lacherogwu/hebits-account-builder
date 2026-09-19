@@ -70,7 +70,7 @@ function farmLog(action: string, text: string): void {
   log(`${action}: ${text}`);
 }
 
-const { farmTick, cleanupTick, health, noteLogin } = makeJobs({
+const { farmTick, cleanupTick, adoptTick, health, adoption, noteLogin } = makeJobs({
   cfg,
   store,
   hebits,
@@ -247,7 +247,11 @@ app.get('/:token/status', async (c) => {
     // storeIssue: a state.json that had to be moved aside resets the fallback download count
     // and empties the torrent index, so it belongs next to configIssues rather than only in
     // the log line nobody was watching when the process started.
-    health: { ...health, logFile: LOG_FILE, configIssues: cfg.configIssues, storeIssue: store.loadIssue },
+    // adoption: which torrents qBittorrent was already holding that the builder has taken
+    // over, and which tagged ones it declined to take over and why. It belongs next to the
+    // other two because it changes what the cleanup job is allowed to delete, and because
+    // "nothing was adopted" is the shape of the silent failure it exists to prevent.
+    health: { ...health, logFile: LOG_FILE, configIssues: cfg.configIssues, storeIssue: store.loadIssue, adoption },
     recentActivity: (store.data.farmLog || []).slice(-20).reverse(),
     freeGB: Number.isFinite(freeBytes) ? Math.round(freeBytes / GB) : null,
     torrents: Object.entries(store.data.torrents)
@@ -289,6 +293,11 @@ function rotateLog(): void {
 
 rotateLog();
 setInterval(rotateLog, 3600_000);
+// Ahead of the first cleanup pass, and late enough that a qBittorrent still starting up with
+// the rest of the machine has had a moment. Nothing depends on this particular run: it is a
+// tick precisely so that a qBittorrent which is down now is adopted from whenever it is back.
+setTimeout(adoptTick, 45_000);
+setInterval(adoptTick, 30 * 60_000);
 setTimeout(farmTick, 60_000);
 setInterval(farmTick, (cfg.farm?.intervalMin ?? 10) * 60_000);
 setTimeout(cleanupTick, 90_000);
