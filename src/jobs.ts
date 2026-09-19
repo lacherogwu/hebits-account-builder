@@ -83,6 +83,10 @@ export interface Jobs {
   farmTick: () => Promise<void>;
   cleanupTick: () => Promise<void>;
   health: Health;
+  // Exposed so the cookie page can report a successful save immediately, instead of the
+  // status only catching up on the next scheduled farmTick (up to cfg.farm.intervalMin
+  // later). The `was === 'failing'` guard inside stays untouched either way.
+  noteLogin: (ok: boolean, err?: string) => void;
 }
 
 export function makeJobs({ cfg, store, hebits, qbit, notifier, ensureTorrent, farmLog, log }: MakeJobsDeps): Jobs {
@@ -245,5 +249,5 @@ export function makeJobs({ cfg, store, hebits, qbit, notifier, ensureTorrent, fa
     }
   }
 
-  return { farmTick, cleanupTick, health };
+  return { farmTick, cleanupTick, health, noteLogin };
 }

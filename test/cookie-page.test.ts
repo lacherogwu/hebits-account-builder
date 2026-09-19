@@ -46,6 +46,14 @@ function deps(
     log: () => {},
     hebits: (_cookie: string) => ({ checkLogin: () => checkLogin(_cookie) }),
     writeCookie: over.writeCookie ?? (() => {}),
+    // A minimal stand-in for jobs.ts's real noteLogin: enough to prove handleCookiePage
+    // calls it (and mutates the same `health` the page reads), without re-testing
+    // noteLogin's own throttling/notification behaviour, which is jobs.test.ts's job.
+    noteLogin: (ok: boolean, err?: string) => {
+      health.hebitsLogin = ok ? 'ok' : 'failing';
+      health.checkedAt = new Date().toISOString();
+      health.error = ok ? null : (err ?? null);
+    },
   };
 }
 
@@ -77,4 +85,11 @@ test('a dead cookie is rejected and nothing is written', async () => {
   );
   expect(writes).toEqual([]);
   expect(out.body).not.toContain('session=dead');
+});
+
+test('a successful save flips health to ok immediately, not on the next tick', async () => {
+  const built = deps({ checkLogin: async () => {} });
+  expect(built.health.hebitsLogin).toBe('unknown');
+  await handleCookiePage(reqWith('session=good'), res(), built);
+  expect(built.health.hebitsLogin).toBe('ok');
 });

@@ -56,9 +56,13 @@ export interface CookiePageDeps {
   // `(cookie) => new Hebits({ cookie })` from hebits-client.
   hebits: (cookie: string) => { checkLogin(): Promise<void> };
   writeCookie: (cookie: string) => void;
+  // Flips `health.hebitsLogin` to 'ok' the moment a save succeeds, so the page's own status
+  // line is never stale for the operator who just fixed it. Without this, health only
+  // catches up on the next scheduled farmTick.
+  noteLogin: (ok: boolean, err?: string) => void;
 }
 
-export async function handleCookiePage(req: CookiePageReq, res: CookiePageRes, { health, farmLog, log, hebits, writeCookie }: CookiePageDeps): Promise<void> {
+export async function handleCookiePage(req: CookiePageReq, res: CookiePageRes, { health, farmLog, log, hebits, writeCookie, noteLogin }: CookiePageDeps): Promise<void> {
   const send = (code: number, html: string): void => {
     res.writeHead(code, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
     res.end(html);
@@ -78,6 +82,7 @@ export async function handleCookiePage(req: CookiePageReq, res: CookiePageRes, {
   try {
     await hebits(cookie).checkLogin();
     writeCookie(cookie);
+    noteLogin(true);
     farmLog('cookie-updated', 'Hebits cookie updated (verified login)');
     return send(200, page('Saved. The new cookie is logged in.', true));
   } catch (e) {

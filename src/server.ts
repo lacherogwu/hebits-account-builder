@@ -34,7 +34,7 @@ function farmLog(action: string, text: string): void {
   log(`${action}: ${text}`);
 }
 
-const { farmTick, cleanupTick, health } = makeJobs({
+const { farmTick, cleanupTick, health, noteLogin } = makeJobs({
   cfg, store, hebits, qbit, notifier, ensureTorrent, farmLog, log,
 });
 
@@ -79,6 +79,7 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
         log,
         hebits: (cookie: string) => new Hebits({ cookie }),
         writeCookie,
+        noteLogin,
       });
     }
     if (route === 'notify-test') {
