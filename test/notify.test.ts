@@ -26,7 +26,12 @@ async function withHook(fn: (url: string, got: Record<string, string>[]) => Prom
 test('sends, then stays quiet for the same kind until reset', async () => {
   await withHook(async (url, got) => {
     const state: Record<string, number> = {};
-    const n = new Notifier({ webhookUrl: url }, state, () => {}, () => {});
+    const n = new Notifier(
+      { webhookUrl: url },
+      state,
+      () => {},
+      () => {},
+    );
     expect(await n.send('login', 'T', 'M', { now: 1000 })).toBe(true);
     expect(await n.send('login', 'T', 'M', { now: 2000 })).toBe(false);
     expect(await n.send('disk', 'T2', 'M2', { now: 2000 })).toBe(true);
@@ -38,10 +43,20 @@ test('sends, then stays quiet for the same kind until reset', async () => {
 });
 
 test('disabled without a URL, and survives an unreachable hook', async () => {
-  const off = new Notifier({}, {}, () => {}, () => {});
+  const off = new Notifier(
+    {},
+    {},
+    () => {},
+    () => {},
+  );
   expect(await off.send('x', 't', 'm')).toBe(false);
   const logs: string[] = [];
-  const bad = new Notifier({ webhookUrl: 'http://127.0.0.1:9/nothing' }, {}, () => {}, (m) => logs.push(m));
+  const bad = new Notifier(
+    { webhookUrl: 'http://127.0.0.1:9/nothing' },
+    {},
+    () => {},
+    (m) => logs.push(m),
+  );
   expect(await bad.send('x', 't', 'm')).toBe(false);
   expect(logs.length).toBe(1);
 });
@@ -120,14 +135,24 @@ test('a command is run with rendered arguments', async () => {
     {},
     () => {},
     () => {},
-    { execFile: async (cmd, args) => { calls.push({ cmd, args }); return { stdout: '', stderr: '' }; } },
+    {
+      execFile: async (cmd, args) => {
+        calls.push({ cmd, args });
+        return { stdout: '', stderr: '' };
+      },
+    },
   );
   expect(await n.send('k', 'T', 'M')).toBe(true);
   expect(calls[0]).toEqual({ cmd: '/bin/echo', args: ['T', 'M'] });
 });
 
 test('a notifier with neither a webhook nor a command is disabled', async () => {
-  const n = new Notifier({}, {}, () => {}, () => {});
+  const n = new Notifier(
+    {},
+    {},
+    () => {},
+    () => {},
+  );
   expect(n.enabled).toBe(false);
   expect(await n.send('k', 'T', 'M')).toBe(false);
 });
@@ -140,7 +165,12 @@ test('a failing transport does not record the send, so the next attempt retries'
     state,
     () => {},
     () => {},
-    { fetch: async () => { fetchCalls++; return { ok: false, status: 500 } as Response; } },
+    {
+      fetch: async () => {
+        fetchCalls++;
+        return { ok: false, status: 500 } as Response;
+      },
+    },
   );
   expect(await n.send('k', 'T', 'M')).toBe(false);
   expect(fetchCalls).toBe(1);
@@ -160,7 +190,10 @@ test('both transports fire when both are configured', async () => {
         sent.push({ url: String(url), init: init ?? {} });
         return { ok: true, status: 200 } as Response;
       },
-      execFile: async (cmd, args) => { calls.push({ cmd, args }); return { stdout: '', stderr: '' }; },
+      execFile: async (cmd, args) => {
+        calls.push({ cmd, args });
+        return { stdout: '', stderr: '' };
+      },
     },
   );
   expect(await n.send('k', 'T', 'M')).toBe(true);
@@ -176,7 +209,12 @@ test('a failing command does not record the send, so the next attempt retries', 
     state,
     () => {},
     () => {},
-    { execFile: async () => { execFileCalls++; throw new Error('boom'); } },
+    {
+      execFile: async () => {
+        execFileCalls++;
+        throw new Error('boom');
+      },
+    },
   );
   expect(await n.send('k', 'T', 'M')).toBe(false);
   expect(execFileCalls).toBe(1);
@@ -186,7 +224,14 @@ test('a failing command does not record the send, so the next attempt retries', 
 test('prune drops throttle entries older than maxAgeMs and saves once', () => {
   let saves = 0;
   const state: Record<string, number> = { 'torrent-old': 1000, 'stuck-recent': 9000, login: 500 };
-  const n = new Notifier({}, state, () => { saves++; }, () => {});
+  const n = new Notifier(
+    {},
+    state,
+    () => {
+      saves++;
+    },
+    () => {},
+  );
   n.prune(5000, 10000);
   expect(state).toEqual({ 'stuck-recent': 9000 });
   expect(saves).toBe(1);
@@ -195,7 +240,14 @@ test('prune drops throttle entries older than maxAgeMs and saves once', () => {
 test('prune does nothing, and does not save, when nothing is stale', () => {
   let saves = 0;
   const state: Record<string, number> = { fresh: 9000 };
-  const n = new Notifier({}, state, () => { saves++; }, () => {});
+  const n = new Notifier(
+    {},
+    state,
+    () => {
+      saves++;
+    },
+    () => {},
+  );
   n.prune(5000, 10000);
   expect(state).toEqual({ fresh: 9000 });
   expect(saves).toBe(0);
@@ -203,9 +255,10 @@ test('prune does nothing, and does not save, when nothing is stale', () => {
 
 test('{{json:...}} survives a backslash in the rendered default body', () => {
   const hostile = 'back\\slash "quote"\nnewline';
-  const out = renderTemplate(
-    '{"kind":"{{json:kind}}","title":"{{json:title}}","message":"{{json:message}}"}',
-    { kind: 'k', title: 'T', message: hostile },
-  );
+  const out = renderTemplate('{"kind":"{{json:kind}}","title":"{{json:title}}","message":"{{json:message}}"}', {
+    kind: 'k',
+    title: 'T',
+    message: hostile,
+  });
   expect(JSON.parse(out)).toEqual({ kind: 'k', title: 'T', message: hostile });
 });

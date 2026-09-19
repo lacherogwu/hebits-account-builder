@@ -32,7 +32,12 @@ const store = new Store(CONFIG_DIR, cfg.timezone, (m) => log(m));
 // reaches the tracker on every load anyway, since dailyDownloads() never caches.
 const hebits = new Hebits({ cookie: () => readCookie() ?? '', cacheTtlMs: 0 });
 const qbit = new QBit(cfg);
-const notifier = new Notifier(cfg.notify || {}, (store.data.notified ??= {}), () => store.save(), (m) => log(m));
+const notifier = new Notifier(
+  cfg.notify || {},
+  (store.data.notified ??= {}),
+  () => store.save(),
+  (m) => log(m),
+);
 const log = (...a: unknown[]): void => console.log(new Date().toISOString(), ...a);
 const GB = 1024 ** 3;
 
@@ -47,7 +52,14 @@ function farmLog(action: string, text: string): void {
 }
 
 const { farmTick, cleanupTick, health, noteLogin } = makeJobs({
-  cfg, store, hebits, qbit, notifier, ensureTorrent, farmLog, log,
+  cfg,
+  store,
+  hebits,
+  qbit,
+  notifier,
+  ensureTorrent,
+  farmLog,
+  log,
 });
 
 function tokenOk(given: string | undefined): boolean {
@@ -148,7 +160,9 @@ app.get('/:token/cookie', runCookiePage);
 app.post('/:token/cookie', runCookiePage);
 
 app.get('/:token/notify-test', async (c) => {
-  const sent = await notifier.send('test', 'Hebits account builder test', 'Notifications from the Hebits account builder work.', { force: true });
+  const sent = await notifier.send('test', 'Hebits account builder test', 'Notifications from the Hebits account builder work.', {
+    force: true,
+  });
   return json(c, sent ? 200 : 502, { sent, enabled: notifier.enabled });
 });
 

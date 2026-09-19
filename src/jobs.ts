@@ -200,7 +200,11 @@ export function makeJobs({ cfg, store, hebits, qbit, notifier, ensureTorrent, fa
     if (cleanupBusy || !cfg.cleanup?.enabled) return;
     cleanupBusy = true;
     try {
-      const managed = new Set(Object.values(store.data.torrents).map((t) => t.hash).filter((h): h is string => Boolean(h)));
+      const managed = new Set(
+        Object.values(store.data.torrents)
+          .map((t) => t.hash)
+          .filter((h): h is string => Boolean(h)),
+      );
       const all = await qbit.all();
       const freeBytes = await qbit.freeSpace();
       if (!Number.isFinite(freeBytes)) throw new Error('qBittorrent returned a non-numeric free space value');
@@ -244,7 +248,11 @@ export function makeJobs({ cfg, store, hebits, qbit, notifier, ensureTorrent, fa
       }
       const freeAfter = await qbit.freeSpace();
       if (freeAfter < (cfg.lowDiskAlertGB ?? 15) * GB) {
-        alertProblem('disk', 'Hebits builder: disk almost full', `${(freeAfter / GB).toFixed(1)} GB free and nothing safe left to release.`);
+        alertProblem(
+          'disk',
+          'Hebits builder: disk almost full',
+          `${(freeAfter / GB).toFixed(1)} GB free and nothing safe left to release.`,
+        );
       }
       notifier.prune();
     } catch (e) {

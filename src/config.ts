@@ -157,7 +157,13 @@ function validateScalar(key: string, schema: z.ZodType, fallback: unknown, recei
 // - A key in `shape` with the wrong type: that key falls back, the rest of the object -
 //   including keys `shape` doesn't enumerate, such as future GrabOptions/CleanupOptions
 //   knobs - survives untouched.
-function validateOptions(name: string, shape: Record<string, z.ZodType>, fallback: Record<string, unknown>, received: unknown, issues: string[]): Record<string, unknown> {
+function validateOptions(
+  name: string,
+  shape: Record<string, z.ZodType>,
+  fallback: Record<string, unknown>,
+  received: unknown,
+  issues: string[],
+): Record<string, unknown> {
   if (typeof received !== 'object' || received === null || Array.isArray(received)) {
     logIssue(`"${name}" is a ${typeOf(received)}, not an object - using default`, issues);
     return {};
@@ -197,9 +203,21 @@ export function loadConfig(): Config {
     else validated[key] = value;
   }
 
-  if ('farm' in saved) validated.farm = { ...DEFAULTS.farm, ...validateOptions('farm', grabOptionsShape, DEFAULTS.farm as Record<string, unknown>, saved.farm, configIssues) };
-  if ('cleanup' in saved) validated.cleanup = { ...DEFAULTS.cleanup, ...validateOptions('cleanup', cleanupOptionsShape, DEFAULTS.cleanup as Record<string, unknown>, saved.cleanup, configIssues) };
-  if ('notify' in saved) validated.notify = { ...DEFAULTS.notify, ...validateOptions('notify', notifyShape, DEFAULTS.notify as Record<string, unknown>, saved.notify, configIssues) };
+  if ('farm' in saved)
+    validated.farm = {
+      ...DEFAULTS.farm,
+      ...validateOptions('farm', grabOptionsShape, DEFAULTS.farm as Record<string, unknown>, saved.farm, configIssues),
+    };
+  if ('cleanup' in saved)
+    validated.cleanup = {
+      ...DEFAULTS.cleanup,
+      ...validateOptions('cleanup', cleanupOptionsShape, DEFAULTS.cleanup as Record<string, unknown>, saved.cleanup, configIssues),
+    };
+  if ('notify' in saved)
+    validated.notify = {
+      ...DEFAULTS.notify,
+      ...validateOptions('notify', notifyShape, DEFAULTS.notify as Record<string, unknown>, saved.notify, configIssues),
+    };
 
   const cfg: Config = { ...DEFAULTS, ...validated, token, configIssues } as Config;
   mkdirSync(cfg.torrentDir, { recursive: true, mode: 0o700 });

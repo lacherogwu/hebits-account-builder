@@ -49,9 +49,7 @@ export class Store {
     this.file = join(dir, 'state.json');
     this.timezone = timezone;
     this.log = log;
-    this.data = existsSync(this.file)
-      ? (JSON.parse(readFileSync(this.file, 'utf8')) as StoreData)
-      : { grabs: [], torrents: {} };
+    this.data = existsSync(this.file) ? (JSON.parse(readFileSync(this.file, 'utf8')) as StoreData) : { grabs: [], torrents: {} };
   }
 
   save(): boolean {

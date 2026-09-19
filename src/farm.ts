@@ -183,9 +183,7 @@ export function stuckDownloads<T extends { hash: string; progress: number; added
   { now, managed, hours = 24 }: { now: number; managed: Set<string>; hours?: number },
 ): T[] {
   const nowSec = now / 1000;
-  return torrents.filter(
-    (t) => managed.has(t.hash) && t.progress < 1 && nowSec - (t.added_on || nowSec) >= hours * 3600,
-  );
+  return torrents.filter((t) => managed.has(t.hash) && t.progress < 1 && nowSec - (t.added_on || nowSec) >= hours * 3600);
 }
 
 // Season packs etc. are fine to farm; this is only used for log text.

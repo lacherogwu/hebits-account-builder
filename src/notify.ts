@@ -76,7 +76,12 @@ export class Notifier {
   }
 
   // Same `kind` is sent at most once per `quietMs` unless `force`.
-  async send(kind: string, title: string, message: string, { quietMs = DEFAULT_QUIET_MS, force = false, now = Date.now() }: SendOptions = {}): Promise<boolean> {
+  async send(
+    kind: string,
+    title: string,
+    message: string,
+    { quietMs = DEFAULT_QUIET_MS, force = false, now = Date.now() }: SendOptions = {},
+  ): Promise<boolean> {
     if (!this.enabled) return false;
     const last = this.state[kind];
     if (!force && last !== undefined && now - last < quietMs) return false;

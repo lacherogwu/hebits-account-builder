@@ -7,15 +7,45 @@ const enc = (s: string) => `${Buffer.byteLength(s)}:${s}`;
 test('multi-file torrent: infohash, files, offsets, pad files', () => {
   const info =
     'd' +
-    enc('files') + 'l' +
-      'd' + enc('length') + 'i100e' + enc('path') + 'l' + enc('a.mkv') + 'e' + 'e' +
-      'd' + enc('attr') + enc('p') + enc('length') + 'i28e' + enc('path') + 'l' + enc('.pad') + enc('28') + 'e' + 'e' +
-      'd' + enc('length') + 'i50e' + enc('path') + 'l' + enc('sub') + enc('b.mkv') + 'e' + 'e' +
+    enc('files') +
+    'l' +
+    'd' +
+    enc('length') +
+    'i100e' +
+    enc('path') +
+    'l' +
+    enc('a.mkv') +
     'e' +
-    enc('name') + enc('Show') +
-    enc('piece length') + 'i64e' +
-    enc('pieces') + enc('x'.repeat(60)) +
-    enc('private') + 'i1e' +
+    'e' +
+    'd' +
+    enc('attr') +
+    enc('p') +
+    enc('length') +
+    'i28e' +
+    enc('path') +
+    'l' +
+    enc('.pad') +
+    enc('28') +
+    'e' +
+    'e' +
+    'd' +
+    enc('length') +
+    'i50e' +
+    enc('path') +
+    'l' +
+    enc('sub') +
+    enc('b.mkv') +
+    'e' +
+    'e' +
+    'e' +
+    enc('name') +
+    enc('Show') +
+    enc('piece length') +
+    'i64e' +
+    enc('pieces') +
+    enc('x'.repeat(60)) +
+    enc('private') +
+    'i1e' +
     'e';
   const buf = Buffer.from('d' + enc('announce') + enc('http://t/a') + enc('info') + info + 'e');
   const t = readTorrent(buf);
@@ -30,7 +60,8 @@ test('multi-file torrent: infohash, files, offsets, pad files', () => {
 });
 
 test('single-file torrent', () => {
-  const info = 'd' + enc('length') + 'i10e' + enc('name') + enc('movie.mkv') + enc('piece length') + 'i4e' + enc('pieces') + enc('y'.repeat(60)) + 'e';
+  const info =
+    'd' + enc('length') + 'i10e' + enc('name') + enc('movie.mkv') + enc('piece length') + 'i4e' + enc('pieces') + enc('y'.repeat(60)) + 'e';
   const t = readTorrent(Buffer.from('d' + enc('info') + info + 'e'));
   expect(t.private).toBe(false);
   expect(t.files).toEqual([{ path: 'movie.mkv', length: 10, offset: 0 }]);

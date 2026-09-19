@@ -77,7 +77,11 @@ export function makeGrabber({ cfg, store, hebits, qbit, log }: GrabDeps) {
     }
   }
 
-  async function ensureTorrent(hebitsId: string, meta: Partial<TorrentEntry>, { category = cfg.watchCategory, savePath = cfg.watchPath }: EnsureTorrentOptions = {}) {
+  async function ensureTorrent(
+    hebitsId: string,
+    meta: Partial<TorrentEntry>,
+    { category = cfg.watchCategory, savePath = cfg.watchPath }: EnsureTorrentOptions = {},
+  ) {
     return withLock(hebitsId, async () => {
       let entry = store.torrent(hebitsId);
       if (entry?.hash && (await qbit.torrent(entry.hash))) {

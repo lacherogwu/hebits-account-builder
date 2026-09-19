@@ -39,8 +39,12 @@ function harness(cfgOver: Partial<GrabConfig> = {}) {
     },
   };
   const cfg: GrabConfig = {
-    torrentDir: dir, watchCategory: 'watch', watchPath: '/tmp/watch',
-    minFreeGB: 20, dailyLimit: 10, ...cfgOver,
+    torrentDir: dir,
+    watchCategory: 'watch',
+    watchPath: '/tmp/watch',
+    minFreeGB: 20,
+    dailyLimit: 10,
+    ...cfgOver,
   };
   const store = new Store(dir, 'UTC');
   const hebits: GrabHebits = {

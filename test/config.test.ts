@@ -9,7 +9,9 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'hebits-cfg-'));
   process.env.HEBITS_BUILDER_DIR = dir;
 });
-afterEach(() => { delete process.env.HEBITS_BUILDER_DIR; });
+afterEach(() => {
+  delete process.env.HEBITS_BUILDER_DIR;
+});
 
 function writeConfig(contents: Record<string, unknown>): void {
   writeFileSync(join(dir, 'config.json'), JSON.stringify(contents), { mode: 0o600 });

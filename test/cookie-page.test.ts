@@ -32,12 +32,7 @@ function res(): CookiePageRes & { statusCode: number; body: string } {
 // Fakes only - nothing here touches the network or the filesystem. `checkLogin` and
 // `writeCookie` are the two collaborators the tests care about; everything else is a
 // harmless default so the dependency list stays complete without every test restating it.
-function deps(
-  over: {
-    checkLogin?: (cookie: string) => Promise<void>;
-    writeCookie?: (cookie: string) => void;
-  } = {},
-): CookiePageDeps {
+function deps(over: { checkLogin?: (cookie: string) => Promise<void>; writeCookie?: (cookie: string) => void } = {}): CookiePageDeps {
   const health: Health = { hebitsLogin: 'unknown', checkedAt: null, error: null };
   const checkLogin = over.checkLogin ?? (async () => {});
   return {

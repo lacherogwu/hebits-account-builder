@@ -1,14 +1,6 @@
 import type { HebitsTorrent } from 'hebits-client';
 import { expect, test } from 'vitest';
-import {
-  pickGrabs,
-  pickRemovals,
-  pointsPerHour,
-  requiredRatioFor,
-  stuckDownloads,
-  type GrabContext,
-  type QbitTorrent,
-} from '../src/farm';
+import { pickGrabs, pickRemovals, pointsPerHour, requiredRatioFor, stuckDownloads, type GrabContext, type QbitTorrent } from '../src/farm';
 import { torrent } from './factory';
 
 const GB = 1024 ** 3;

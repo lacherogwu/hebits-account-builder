@@ -4,7 +4,10 @@ import { QBit } from '../src/qbit';
 afterEach(() => vi.unstubAllGlobals());
 
 test('freeSpace returns NaN when qBittorrent gives a non-numeric value', async () => {
-  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ server_state: {} }), { status: 200 })));
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => new Response(JSON.stringify({ server_state: {} }), { status: 200 })),
+  );
   const q = new QBit({ qbitUrl: 'http://qbit.test', qbitUsername: '', qbitPassword: '' });
   expect(Number.isNaN(await q.freeSpace())).toBe(true);
 });

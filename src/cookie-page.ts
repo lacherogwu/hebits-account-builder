@@ -62,7 +62,11 @@ export interface CookiePageDeps {
   noteLogin: (ok: boolean, err?: string) => void;
 }
 
-export async function handleCookiePage(req: CookiePageReq, res: CookiePageRes, { health, farmLog, log, hebits, writeCookie, noteLogin }: CookiePageDeps): Promise<void> {
+export async function handleCookiePage(
+  req: CookiePageReq,
+  res: CookiePageRes,
+  { health, farmLog, log, hebits, writeCookie, noteLogin }: CookiePageDeps,
+): Promise<void> {
   const send = (code: number, html: string): void => {
     res.writeHead(code, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
     res.end(html);
@@ -74,7 +78,10 @@ export async function handleCookiePage(req: CookiePageReq, res: CookiePageRes, {
     body += chunk;
     if (body.length > 16_000) return send(413, page('Too long.', false));
   }
-  const cookie = new URLSearchParams(body).get('cookie')?.replace(/^cookie:\s*/i, '').trim();
+  const cookie = new URLSearchParams(body)
+    .get('cookie')
+    ?.replace(/^cookie:\s*/i, '')
+    .trim();
   if (!cookie || !cookie.includes('=')) return send(400, page('That does not look like a cookie value.', false));
   // Never echo the pasted value back into the page or the log, on either path: it is a
   // credential, and this page is the one place an operator pastes it. Only the verify
