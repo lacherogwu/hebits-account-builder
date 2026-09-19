@@ -89,6 +89,22 @@ export function demotionRatioFor(rank: string | undefined): number {
   return rankByName(rank)?.demotedBelow ?? 0;
 }
 
+// Pacing, not a quota. The point of an hourly ceiling is that the day's allowance is not
+// spent in the first hour, so a better release six hours from now still finds a slot. A
+// constant did that at Heb Rookie and quietly stopped doing it further up: at 2 per hour an
+// account can take 48 a day, which is under the allowance of every rank from Heb Lover (50)
+// upward and less than half of Heb Prophet's 100. Pacing that costs you downloads is not
+// pacing, it is a cap.
+//
+// So: spread the farmable allowance across roughly half a day, which leaves the ceiling at
+// least twice what 24 hours of grabbing needs - it paces bursts without ever being the
+// binding constraint. The floor of 2 keeps the low ranks behaving exactly as before, where
+// the daily limit binds first anyway and this number never mattered.
+export const PACE_HOURS = 12;
+export function pacePerHour(farmableToday: number): number {
+  return Math.max(2, Math.ceil(Math.max(0, farmableToday) / PACE_HOURS));
+}
+
 /** Downloads per day at this rank, or undefined when the rank is unknown. */
 export function dailyLimitFor(rank: string | undefined): number | undefined {
   return rankByName(rank)?.dailyLimit;
@@ -420,7 +436,11 @@ export const GRAB_DEFAULTS = {
   reserveGB: 40,
   keepForUser: 3,
   maxPerRun: 2,
-  maxPerHour: 2, // spread the day's slots so later, better releases still get one
+  /** Unset: paced from the rank's own allowance by pacePerHour(). Set: an operator pinning
+   *  the hourly ceiling. It exists to spread the day's slots so later, better releases still
+   *  get one - as a constant it stopped doing that job at the top of the ladder and became a
+   *  cap instead. */
+  maxPerHour: undefined as number | undefined,
   quietAfterHours: 1, // older than this with nobody downloading: no upload to be had
   ratioMargin: 0.2,
   /** A rank name from RANKS, or AUTO_TARGET for "one rung above where the account is". */
@@ -556,7 +576,9 @@ export function pickGrabs(items: HebitsTorrent[], ctx: GrabContext): { item: Heb
   if (!Number.isFinite(ctx.freeBytes)) return [];
   const o = { ...GRAB_DEFAULTS, ...ctx.opts };
   const { stats } = ctx;
-  let slots = Math.min(o.maxPerRun, o.maxPerHour - (ctx.grabbedLastHour ?? 0), stats.dailyLimit - o.keepForUser - stats.dailyUsed);
+  const farmable = Math.max(0, stats.dailyLimit - o.keepForUser);
+  const perHour = Number.isFinite(o.maxPerHour) ? (o.maxPerHour as number) : pacePerHour(farmable);
+  let slots = Math.min(o.maxPerRun, perHour - (ctx.grabbedLastHour ?? 0), stats.dailyLimit - o.keepForUser - stats.dailyUsed);
   if (slots <= 0) return [];
   let free = ctx.freeBytes;
   let downloaded = stats.downloaded;

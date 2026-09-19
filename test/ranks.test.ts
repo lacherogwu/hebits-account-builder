@@ -12,6 +12,7 @@ import {
   nextRankAfter,
   PRESET_NAMES,
   PRESETS,
+  pacePerHour,
   pickGrabs,
   RANKS,
   rankByName,
@@ -562,4 +563,55 @@ test('a points weight can be overridden on its own, like every other dimension',
   });
   // A points-only weighting still expresses a preference, so it is not the all-zero fallback.
   expect(resolveWeights({ preset: 'ratio-first', weights: { ratio: 0, points: 1 } }, progress).preset).toBe('custom');
+});
+
+// --- hourly pacing ---------------------------------------------------------------------------
+// maxPerHour exists so the day's allowance is not spent in the first hour. As the constant 2
+// it did that at the bottom of the ladder and became a CAP further up: 2 an hour is 48 a day,
+// under Heb Lover's 50 and less than half of Heb Prophet's 100.
+
+test('pacing never costs a download, at any rank on the ladder', () => {
+  const KEEP = 3; // GRAB_DEFAULTS.keepForUser
+  for (const rank of RANKS) {
+    const farmable = Math.max(0, rank.dailyLimit - KEEP);
+    const reachable = pacePerHour(farmable) * 24;
+    expect(reachable, `${rank.name}: ${reachable} reachable vs ${farmable} allowed`).toBeGreaterThanOrEqual(farmable);
+  }
+  // The control: the old constant DID cost downloads, so the loop above is not vacuous.
+  const topAllowance = Math.max(...RANKS.map((r) => r.dailyLimit));
+  expect(2 * 24).toBeLessThan(topAllowance - KEEP);
+});
+
+test('pacing still paces: it is well under the whole allowance in one hour', () => {
+  for (const rank of RANKS) {
+    const farmable = Math.max(0, rank.dailyLimit - KEEP_FOR_USER);
+    if (farmable <= 2) continue; // the floor of 2 is the whole allowance at the very bottom
+    expect(pacePerHour(farmable)).toBeLessThan(farmable);
+  }
+});
+const KEEP_FOR_USER = 3;
+
+test('the low ranks are paced exactly as they were before', () => {
+  // Heb Rookie: 10/day - 3 = 7 farmable. The floor keeps this at 2, unchanged.
+  expect(pacePerHour(7)).toBe(2);
+  // ...and the top of the ladder is no longer stuck there.
+  expect(pacePerHour(97)).toBeGreaterThan(2);
+});
+
+test('a high rank keeps grabbing after the old ceiling would have stopped it', () => {
+  // Two already taken this hour. Under the old constant maxPerHour of 2 this left 0 slots and
+  // returned nothing, whatever the rank allowed.
+  const rich = { uploaded: 500 * GB, downloaded: 0, dailyUsed: 2, dailyLimit: 100, userClass: 'Heb Prophet' };
+  const picks = pickGrabs(conflicted, ctx({ stats: rich, grabbedLastHour: 2, opts: { maxPerRun: 1 } }));
+  expect(picks.length).toBe(1);
+
+  // The control: at Heb Rookie's allowance the same situation still stops, because there the
+  // floor of 2 is the pace and two have already gone.
+  const poor = { uploaded: 500 * GB, downloaded: 0, dailyUsed: 2, dailyLimit: 10, userClass: 'Heb Rookie' };
+  expect(pickGrabs(conflicted, ctx({ stats: poor, grabbedLastHour: 2, opts: { maxPerRun: 1 } }))).toEqual([]);
+});
+
+test('an explicit maxPerHour still overrides the pacing', () => {
+  const rich = { uploaded: 500 * GB, downloaded: 0, dailyUsed: 0, dailyLimit: 100, userClass: 'Heb Prophet' };
+  expect(pickGrabs(conflicted, ctx({ stats: rich, grabbedLastHour: 1, opts: { maxPerRun: 1, maxPerHour: 1 } }))).toEqual([]);
 });

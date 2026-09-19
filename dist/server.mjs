@@ -11051,6 +11051,9 @@ function nextRankAfter(name) {
 function demotionRatioFor(rank) {
 	return rankByName(rank)?.demotedBelow ?? 0;
 }
+function pacePerHour(farmableToday) {
+	return Math.max(2, Math.ceil(Math.max(0, farmableToday) / 12));
+}
 /** Downloads per day at this rank, or undefined when the rank is unknown. */
 function dailyLimitFor(rank) {
 	return rankByName(rank)?.dailyLimit;
@@ -11221,7 +11224,11 @@ const GRAB_DEFAULTS = {
 	reserveGB: 40,
 	keepForUser: 3,
 	maxPerRun: 2,
-	maxPerHour: 2,
+	/** Unset: paced from the rank's own allowance by pacePerHour(). Set: an operator pinning
+	*  the hourly ceiling. It exists to spread the day's slots so later, better releases still
+	*  get one - as a constant it stopped doing that job at the top of the ladder and became a
+	*  cap instead. */
+	maxPerHour: void 0,
 	quietAfterHours: 1,
 	ratioMargin: .2,
 	/** A rank name from RANKS, or AUTO_TARGET for "one rung above where the account is". */
@@ -11303,7 +11310,9 @@ function pickGrabs(items, ctx) {
 		...ctx.opts
 	};
 	const { stats } = ctx;
-	let slots = Math.min(o.maxPerRun, o.maxPerHour - (ctx.grabbedLastHour ?? 0), stats.dailyLimit - o.keepForUser - stats.dailyUsed);
+	const farmable = Math.max(0, stats.dailyLimit - o.keepForUser);
+	const perHour = Number.isFinite(o.maxPerHour) ? o.maxPerHour : pacePerHour(farmable);
+	let slots = Math.min(o.maxPerRun, perHour - (ctx.grabbedLastHour ?? 0), stats.dailyLimit - o.keepForUser - stats.dailyUsed);
 	if (slots <= 0) return [];
 	let free = ctx.freeBytes;
 	let downloaded = stats.downloaded;
