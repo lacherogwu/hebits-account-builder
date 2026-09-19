@@ -93,6 +93,24 @@ const DEFAULTS: Omit<Config, 'token' | 'configIssues'> = {
 // GRAB_DEFAULTS / CLEANUP_DEFAULTS (farm.ts) knobs, beyond the enabled/intervalMin schedule
 // fields. Keep in sync with those; farm.ts is not imported from here to avoid coupling this
 // validator to its internals.
+//
+// `targetRank` and `preset` are the two fields where the wrong STRING is as damaging as the
+// wrong type: a typo ("Heb Fanatik", "ratio-fist") would otherwise sail through z.string(),
+// fall back silently inside farm.ts, and leave the owner reading a /status page that says it
+// is chasing a rank nobody asked for. Both are therefore enumerated, and both lists are
+// asserted equal to farm.ts's RANK_NAMES / PRESET_NAMES by a test - see config.test.ts.
+const RANK_NAMES = [
+  'Heb Rookie',
+  'Heb User',
+  'Heb Lover',
+  'Heb Veteran',
+  'Heb Fanatic',
+  'Heb Elite',
+  'Heb Supreme',
+  'Heb Prophet',
+] as const;
+const PRESET_NAMES = ['ratio-first', 'balanced', 'volume-first', 'count-first'] as const;
+
 const grabOptionsShape: Record<string, z.ZodType> = {
   enabled: z.boolean(),
   intervalMin: z.number(),
@@ -108,6 +126,13 @@ const grabOptionsShape: Record<string, z.ZodType> = {
   countedTargetGB: z.number(),
   ratioMargin: z.number(),
   targetRatio: z.number(),
+  // 'auto' (the default) means "one rung above whatever rank the account currently holds".
+  targetRank: z.enum(['auto', ...RANK_NAMES]),
+  preset: z.enum(PRESET_NAMES),
+  // Per-dimension overrides, merged over the preset's weights. Unknown keys are stripped;
+  // a non-numeric weight drops the whole object back to the preset it meant to modify,
+  // which is the same fail-open rule every other field here follows.
+  weights: z.object({ ratio: z.number().optional(), volume: z.number().optional(), count: z.number().optional() }),
 };
 
 const cleanupOptionsShape: Record<string, z.ZodType> = {
@@ -273,7 +298,15 @@ function validateOptions(
       // tell the owner nothing about what now happens. Dropping the key is the same action
       // either way; only the wording differs.
       const fix = key in defaults ? `using default ${JSON.stringify(defaults[key])}` : 'ignoring it';
-      logIssue(`"${name}.${key}" is a ${typeOf(out[key])}, not the expected type - ${fix}`, issues);
+      // A misspelled rank or preset ("Heb Fanatik") is the right TYPE and the wrong VALUE, and
+      // "is a string, not the expected type" would send the owner looking for the wrong
+      // mistake. zod reports those as invalid_value and lists what it would have accepted.
+      const issue = result.error.issues[0];
+      const detail =
+        issue?.code === 'invalid_value'
+          ? `is ${JSON.stringify(out[key])}, which is not one of ${(issue.values ?? []).map((v) => JSON.stringify(v)).join(', ')}`
+          : `is a ${typeOf(out[key])}, not the expected type`;
+      logIssue(`"${name}.${key}" ${detail} - ${fix}`, issues);
       delete out[key];
     }
   }

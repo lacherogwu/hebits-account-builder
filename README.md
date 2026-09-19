@@ -46,7 +46,7 @@ environment variable. See `deploy/config.example.json` for a starting point.
 | `token` | random, generated on first run | Secret path segment every route sits behind |
 | `port` | `7001` | Listen port, all interfaces |
 | `lanHost` | empty (auto-detected) | LAN address used in links such as the cookie-update alert; set it if auto-detection picks the wrong interface |
-| `dailyLimit` | `0` | Fallback only; the real counter is read from Hebits through `hebits-client`. `0` means "take the allowance of the rank the account currently holds" (see [The rank ladder](#the-rank-ladder)); a non-zero value pins it |
+| `dailyLimit` | `0` | Fallback only; the real counter is read from Hebits through `hebits-client`. `0` means "take the allowance of the rank the account currently holds" (see the ladder below); a non-zero value pins it |
 | `dailyLimitByDay` | `{}` | Per-day overrides, e.g. `{"2026-09-17": 5}` for a new account's first day |
 | `minFreeGB` | `20` | Free disk space to keep after a download |
 | `timezone` | `Asia/Jerusalem` | Used for the daily download counter's day boundary |
@@ -54,7 +54,7 @@ environment variable. See `deploy/config.example.json` for a starting point.
 | `qbitUsername`, `qbitPassword` | empty | Only needed if qBittorrent's "bypass authentication for clients on localhost" is off |
 | `watchCategory`, `watchPath` | `watch`, `~/hebits/watch` | Category/path for torrents grabbed on demand (for a companion streaming addon) |
 | `seedCategory`, `seedPath` | `seed-auto`, `~/hebits/seed` | Category/path for torrents auto-grabbed to build the account |
-| `farm` | `{"enabled": true, "intervalMin": 10}` | Auto-grab job; see `GRAB_DEFAULTS` in `src/farm.ts` for tuning knobs (`keepForUser`, `reserveGB`, `maxSizeGB`, …) |
+| `farm` | `{"enabled": true, "intervalMin": 10}` | Auto-grab job; see `GRAB_DEFAULTS` in `src/farm.ts` for tuning knobs (`keepForUser`, `reserveGB`, `maxSizeGB`, …) and [Rank targets and presets](#rank-targets-and-presets) for `targetRank`, `preset` and `weights` |
 | `cleanup` | `{"enabled": true, "intervalMin": 30}` | Auto-release job; see `CLEANUP_DEFAULTS` in `src/farm.ts` (`reserveGB`, `minSeedDays`, `keepIfSeedersBelow`, …) |
 | `notify` | `{"webhookUrl": ""}` | Alert transport; see [Notifications](#notifications) |
 | `lowDiskAlertGB` | `15` | Alert threshold after a release pass still leaves the disk full |
@@ -71,10 +71,13 @@ Every route sits behind the random `token` from `config.json`, as a path segment
 unknown route — the token isn't revealed by the response.
 
 - **`/status`** — JSON: account class, upload/download totals, ratio, progress toward the
-  **Heb User** rank, today's download count, Hebits login health, free disk space, the last
-  20 grab/release/error events, and the torrents currently managed. It also reports anything
-  that went wrong at startup: `configIssues` (settings that failed validation and fell back to
-  their default) and `storeIssue` (a `state.json` that had to be moved aside). Every reading
+  **target rank** on each farmable dimension (`account.target`: the rank, which dimension is
+  binding, the preset in force and its weights, and a one-line `summary` such as
+  `ratio 1.51/1.5 ✓, volume 10.4/75 GB, torrents ≥12/50`), today's download count, Hebits
+  login health, free disk space, the last 20 grab/release/error events, and the torrents
+  currently managed. It also reports anything that went wrong at startup: `configIssues`
+  (settings that failed validation and fell back to their default) and `storeIssue` (a
+  `state.json` that had to be moved aside). Every reading
   degrades on its own, so this page still answers when Hebits or qBittorrent is unreachable —
   `freeGB` is `null` when qBittorrent did not answer, not `0`.
 - **`/cookie`** — GET returns a form to paste a fresh Hebits login cookie; POST verifies it
@@ -102,11 +105,11 @@ these tags are the only record. A separate tool reading qBittorrent (such as a c
 Stremio addon sharing the same instance) can use them to recognize torrents this service
 added and match them to an IMDb id, without either service depending on the other.
 
-## The rank ladder
+## Rank targets and presets
 
-Each rank sets its own requirements and its own daily download allowance. `RANKS` in
-`src/farm.ts` carries the table; the allowance is read from the rank the account currently
-holds, so a promotion raises it without anyone editing `config.json`.
+Every rank above Heb Rookie asks for four things: time on site, GB downloaded, a ratio, and —
+from Heb Lover up — a number of torrents downloaded in full. `RANKS` in `src/farm.ts` carries
+the ladder, and `farm.targetRank` says which rung to aim at.
 
 | Rank | Time | Volume | Ratio | Torrents | Demoted below | Downloads/day |
 |---|---|---|---|---|---|---|
@@ -125,16 +128,62 @@ private tracker is not a cosmetic mistake: Heb Rookie's first day is 5 downloads
 here can verify. Donor, V.I.P and the staff classes are not farmable and are deliberately
 absent — an account in one of them reads as an unknown rank, and every fallback applies.
 
-## Account-building policy
+Time on site is the one requirement nothing can farm. It is reported, never chased. The daily
+allowance is read from the rank the account currently *holds*, so a promotion raises it without
+anyone editing `config.json`; everything else is measured against the rank it is *aiming at*.
 
-The goal is the **Heb User** rank: 30 days on the site, 20 GB downloaded, and a ratio of 1.25.
+`farm.targetRank` defaults to `"auto"` — one rung above whatever rank the account currently
+holds — and accepts any rank name to aim higher or to hold a lower target. The volume, ratio
+and torrent-count goals all derive from it; `farm.countedTargetGB` and `farm.targetRatio` still
+pin those two numbers explicitly if you set them.
+
+**Required ratio vs target ratio.** These are different things and only one of them blocks a
+grab. The *required* ratio (`requiredRatioFor`, plus the demotion line of the rank you hold) is
+a floor: crossing it costs the account its rank or its ability to download at all, so a counted
+download may never project below it. The *target* rank's ratio is a goal. It steers which
+torrents are preferred and it is what `/status` reports progress against, but it never refuses
+a grab — an earlier version conflated the two and throttled the account to defend a threshold
+the tracker never required.
+
+**Presets** weight the three farmable dimensions against each other. They decide *which*
+candidates win the day's scarce slots; every filter and every safety check runs identically
+under all of them.
+
+| Preset | ratio | volume | count | For |
+|---|---|---|---|---|
+| `ratio-first` | 1 | 0 | 0 | Ratio is at or near the floor. Nothing else matters from a demoted account |
+| `balanced` | 0.5 | 0.25 | 0.25 | Nothing is binding; keep earning on every dimension |
+| `volume-first` | 0.25 | 0.75 | 0 | GB downloaded is what is missing |
+| `count-first` | 0.25 | 0 | 0.75 | The torrent count is what is missing |
+
+`volume` and `count` pull in opposite directions on purpose: the volume requirement counts GB,
+so it wants big *counted* torrents (freeleech bytes do not count toward it at all), while the
+torrent requirement counts torrents, so a 1 GB episode is worth exactly as much as a 40 GB
+remux. `ratio` constrains both.
+
+With nothing configured the policy farms the **recommended** preset: whichever dimension is
+furthest from the target rank's requirement, except that at or below the ratio floor `ratio`
+wins outright regardless. Set `farm.preset` to pin one, or `farm.weights`
+(`{"ratio": …, "volume": …, "count": …}`) to override individual weights.
+
+**The completed-torrent count is a lower bound**, and `/status` prints it as `≥ n`. The
+tracker's own figure is a lifetime count it never lowers, and nothing this service can reach
+reports it: `hebits-client`'s account stats carry uploaded, downloaded, ratio, required ratio
+and class, and no snatch count. What is counted instead is torrents this service has *observed*
+at 100% — from qBittorrent, plus a `completedAt` stamp kept in `state.json` so releasing a
+torrent does not un-count it. Torrents grabbed by hand, or completed before this service (or
+this `state.json`) existed, are invisible to it, so the real number can only be higher. A count
+with no basis at all is reported as `unknown` rather than as `0`, because a zero would steer
+every decision at a dimension nobody measured.
+
+## Account-building policy
 
 - **Grab** (every 10 min), from uploads of the last 6 h: movies/TV only, 1–40 GB, no remux.
   - Always takes freeleech.
-  - Takes counted downloads only while under 22 GB downloaded, only when half-leech or
-    ×2-upload and ≤ 15 GB. The projected ratio must stay ≥ 1.25 (the Heb User ratio) and
-    ≥ the required ratio + 0.2.
-  - Prefers torrents with more downloaders per seeder. Skips releases older than 1 h that
+  - Takes counted downloads only while under the target rank's volume (plus 10% headroom),
+    only when half-leech or ×2-upload and ≤ 15 GB, and only while the projected ratio stays
+    ≥ the required ratio + 0.2 and ≥ the current rank's demotion line + 0.2.
+  - Ranks candidates by the preset in force (see above). Skips releases older than 1 h that
     nobody is downloading.
   - x2/x3-upload releases rank higher.
   - At most 2 grabs per hour, so later releases in the day still get a slot.

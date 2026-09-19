@@ -191,7 +191,7 @@ test('control: a readable reading above the threshold raises no disk alert at al
   expect(diskAlerts(notifier)).toEqual([]);
 });
 
-// --- The remembered rank ------------------------------------------------------------------
+// --- Rank progress, the completed-torrent count, and the remembered rank --------------------
 
 test('the farm tick remembers the rank the tracker reported', async () => {
   const noteRank = vi.fn();
@@ -209,4 +209,104 @@ test('a tracker that reports no class leaves the remembered rank alone', async (
   const { farmTick } = makeJobs(deps({ hebits: { stats }, store: { data: { torrents: {}, farmLog: [] }, putTorrent: vi.fn(), noteRank } }));
   await farmTick();
   expect(noteRank).not.toHaveBeenCalled();
+});
+
+test('the farm tick stamps torrents that have reached 100%, and stamps each one once', async () => {
+  const putTorrent = vi.fn();
+  const torrents = {
+    done: { hash: 'aaa' },
+    running: { hash: 'bbb' },
+    stamped: { hash: 'ccc', completedAt: '2026-09-01T00:00:00.000Z' },
+  };
+  const all = vi.fn().mockResolvedValue([
+    { hash: 'aaa', progress: 1 },
+    { hash: 'bbb', progress: 0.5 },
+    { hash: 'ccc', progress: 1 },
+  ]);
+  const { farmTick } = makeJobs(deps({ qbit: { all }, store: { data: { torrents, farmLog: [] }, putTorrent, noteRank: vi.fn() } }));
+  await farmTick();
+  expect(putTorrent).toHaveBeenCalledTimes(1);
+  expect(putTorrent.mock.calls[0]?.[0]).toBe('done');
+  expect(putTorrent.mock.calls[0]?.[1]).toMatchObject({ completedAt: expect.any(String) });
+});
+
+test('the cleanup pass stamps completions before it releases anything', async () => {
+  // Seeding time only counts once a torrent is complete, so the pass that deletes files is
+  // the last chance to record that it ever was - the tracker's own count never goes back down.
+  const putTorrent = vi.fn();
+  const all = vi
+    .fn()
+    .mockResolvedValue([{ hash: 'aaa', progress: 1, size: GB, state: 'uploading', seeding_time: 0, num_complete: 9, ratio: 1 }]);
+  const { cleanupTick } = makeJobs(
+    deps({ qbit: { all }, store: { data: { torrents: { '5': { hash: 'aaa' } }, farmLog: [] }, putTorrent, noteRank: vi.fn() } }),
+  );
+  await cleanupTick();
+  expect(putTorrent).toHaveBeenCalledWith('5', expect.objectContaining({ completedAt: expect.any(String) }));
+});
+
+test('the farm log says which dimension is holding the account back', async () => {
+  const log = vi.fn();
+  // The live account's shape: Heb Rookie, ratio just over 1.5, 10.4 GB of the 75 Heb Lover
+  // needs, and a dozen torrents seeding.
+  const seeded = Object.fromEntries(Array.from({ length: 12 }, (_, i) => [String(i), { hash: `hash${i}` }]));
+  const stats = vi.fn().mockResolvedValue({ userId: 1, uploaded: 15.7 * GB, downloaded: 10.4 * GB, userClass: 'Heb Rookie' });
+  const { farmTick } = makeJobs(
+    deps({
+      hebits: { stats },
+      log,
+      cfg: { farm: { enabled: true, targetRank: 'Heb Lover' } },
+      store: { data: { torrents: seeded, farmLog: [] }, putTorrent: vi.fn(), noteRank: vi.fn() },
+      qbit: { all: vi.fn().mockResolvedValue(Object.values(seeded).map((t) => ({ hash: t.hash, progress: 1 }))) },
+    }),
+  );
+  await farmTick();
+  const line = log.mock.calls.map((c) => String(c[0])).find((m) => m.includes('toward Heb Lover'));
+  // The question nothing used to answer: ratio is fine, volume is the constraint, and the
+  // torrent count is reported as the bound it is rather than as a number.
+  expect(line).toContain('ratio 1.51/1.5 ✓');
+  expect(line).toContain('volume 10.4/75 GB');
+  expect(line).toContain('torrents ≥12/50');
+  // 10.4 of 75 GB is 14% of the way there against 24% on the torrent count, so volume is what
+  // is actually binding - and the preset in force follows it.
+  expect(line).toContain('preset volume-first');
+});
+
+test('an unreadable qBittorrent list costs the count, not the grab', async () => {
+  const log = vi.fn();
+  const all = vi.fn().mockRejectedValue(new Error('connection refused'));
+  const ensureTorrent = vi.fn().mockResolvedValue(undefined);
+  const browse = vi.fn().mockResolvedValue([
+    {
+      id: 77,
+      groupId: 1,
+      name: 'Some.Movie.2026.1080p.WEB-DL',
+      groupName: 'Some Movie',
+      categoryId: 1,
+      tags: [],
+      size: 5 * GB,
+      fileCount: 1,
+      seeders: 1,
+      leechers: 9,
+      snatches: 0,
+      uploadedAt: new Date(),
+      downloadFactor: 0,
+      uploadFactor: 1,
+      canUseToken: true,
+      hasSnatched: false,
+    },
+  ]);
+  const { farmTick } = makeJobs(
+    deps({
+      hebits: { browse },
+      qbit: { all },
+      ensureTorrent,
+      log,
+      store: { data: { torrents: {}, farmLog: [] }, putTorrent: vi.fn(), noteRank: vi.fn() },
+    }),
+  );
+  await farmTick();
+  // The count steers preference only. A tick that refused to grab because one local HTTP call
+  // failed would be strictly worse than a tick that grabs with one dimension unknown.
+  expect(ensureTorrent).toHaveBeenCalledTimes(1);
+  expect(log.mock.calls.map((c) => String(c[0])).some((m) => m.includes('torrent list could not be read'))).toBe(true);
 });

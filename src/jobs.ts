@@ -3,7 +3,7 @@ import { networkInterfaces } from 'node:os';
 import type { BrowseOptions, HebitsTorrent } from 'hebits-client';
 import { ApiError, HebitsError, LoginExpiredError, RateLimitedError } from 'hebits-client';
 import type { CleanupOptions, GrabOptions } from './farm';
-import { describe, pickGrabs, pickRemovals, stuckDownloads } from './farm';
+import { countCompleted, describe, newlyCompleted, pickGrabs, pickRemovals, rankProgress, resolveWeights, stuckDownloads } from './farm';
 import type { EnsureTorrentOptions } from './grab';
 import type { SendOptions } from './notify';
 import type { Torrent } from './qbit';
@@ -168,18 +168,49 @@ export function makeJobs({ cfg, store, hebits, qbit, notifier, ensureTorrent, fa
       const items = await hebits.browse({ orderBy: 'time', orderWay: 'desc' });
       const freeBytes = await qbit.freeSpace();
       if (!Number.isFinite(freeBytes)) throw new Error('qBittorrent returned a non-numeric free space value');
+      // The completed-torrent count. Not fatal if it fails: it steers PREFERENCE only, and a
+      // tick that refuses to grab anything because one local HTTP call failed is worse than a
+      // tick that grabs under the recommendation minus one dimension.
+      const all = await qbit.all().catch((e: Error) => {
+        log(`farm: qBittorrent's torrent list could not be read (${e.message}) - the completed-torrent count is from the local index only`);
+        return undefined;
+      });
+      // Stamp what is complete now, so the count survives the cleanup pass releasing it.
+      if (all) {
+        const at = new Date().toISOString();
+        for (const id of newlyCompleted(store.data.torrents, all)) store.putTorrent(id, { completedAt: at });
+      }
+      const completed = countCompleted(store.data.torrents, all);
+      const progress = rankProgress({
+        uploaded: stats.uploaded,
+        downloaded: stats.downloaded,
+        currentRank: stats.userClass,
+        targetRank: cfg.farm?.targetRank,
+        targetRatio: cfg.farm?.targetRatio,
+        completed,
+      });
       const picks = pickGrabs(items, {
         now: Date.now(),
-        stats: { uploaded: stats.uploaded, downloaded: stats.downloaded, dailyUsed: daily.used, dailyLimit: daily.limit },
+        stats: {
+          uploaded: stats.uploaded,
+          downloaded: stats.downloaded,
+          dailyUsed: daily.used,
+          dailyLimit: daily.limit,
+          userClass: stats.userClass,
+        },
         freeBytes,
         known: new Set(Object.keys(store.data.torrents)),
         grabbedLastHour: (store.data.farmLog || []).filter((e) => e.action === 'grab' && Date.now() - Date.parse(e.at) < 3600e3).length,
+        completed,
         opts: cfg.farm,
       });
       log(
         `farm: ${items.length} latest, ${picks.length} to grab; daily ${daily.used}/${daily.limit}, ` +
           `free ${(freeBytes / GB).toFixed(0)} GB, up ${(stats.uploaded / GB).toFixed(2)} GB, down ${(stats.downloaded / GB).toFixed(2)} GB`,
       );
+      // The line that answers "why am I not ranking up?". Without it, an account can sit at
+      // target ratio and target volume and stall on the torrent count with nothing saying so.
+      log(`farm: toward ${progress.targetRank} - ${progress.summary}; preset ${resolveWeights(cfg.farm, progress).preset}`);
       for (const { item, reason } of picks) {
         try {
           await ensureTorrent(
@@ -213,6 +244,11 @@ export function makeJobs({ cfg, store, hebits, qbit, notifier, ensureTorrent, fa
       const all = await qbit.all();
       const freeBytes = await qbit.freeSpace();
       if (!Number.isFinite(freeBytes)) throw new Error('qBittorrent returned a non-numeric free space value');
+      // Before anything is released: a torrent that reached 100% counts toward the rank
+      // ladder for good, so the stamp has to be taken while the files are still here. The
+      // farm tick stamps too; this pass is what covers a tracker outage keeping it away.
+      const completedAt = new Date().toISOString();
+      for (const id of newlyCompleted(store.data.torrents, all)) store.putTorrent(id, { completedAt });
       const removals = pickRemovals(all, {
         now: Date.now(),
         freeBytes,

@@ -437,3 +437,65 @@ test('each notify key is type-checked, and correctly-typed ones survive', async 
   });
   expect(cfg.configIssues).toEqual([]);
 });
+
+// --- Rank targets and presets -------------------------------------------------------------
+// config.ts spells the rank and preset names out itself rather than importing farm.ts (see the
+// comment above grabOptionsShape). These two tests are what keeps the two copies honest, and
+// they do it behaviourally: every name farm.ts publishes must be a name config.json accepts.
+
+test('every rank the ladder publishes is accepted as farm.targetRank', async () => {
+  const { RANK_NAMES, AUTO_TARGET } = await import('../src/farm');
+  for (const name of [...RANK_NAMES, AUTO_TARGET]) {
+    vi.resetModules();
+    writeConfig({ farm: { targetRank: name } });
+    const { loadConfig } = await import('../src/config');
+    const cfg = loadConfig();
+    expect(cfg.configIssues, `${name} should be a valid targetRank`).toEqual([]);
+    expect((cfg.farm as Record<string, unknown>).targetRank).toBe(name);
+  }
+});
+
+test('every preset the policy publishes is accepted as farm.preset', async () => {
+  const { PRESET_NAMES } = await import('../src/farm');
+  for (const name of PRESET_NAMES) {
+    vi.resetModules();
+    writeConfig({ farm: { preset: name } });
+    const { loadConfig } = await import('../src/config');
+    const cfg = loadConfig();
+    expect(cfg.configIssues, `${name} should be a valid preset`).toEqual([]);
+    expect((cfg.farm as Record<string, unknown>).preset).toBe(name);
+  }
+});
+
+test('a misspelled rank or preset is reported as a bad VALUE, not a bad type', async () => {
+  writeConfig({ farm: { targetRank: 'Heb Fanatik', preset: 'ratio-fist', maxPerRun: 1 } });
+  const { loadConfig } = await import('../src/config');
+  const cfg = loadConfig();
+  // Both are dropped, so farm.ts falls back rather than chasing a rank nobody asked for.
+  expect((cfg.farm as Record<string, unknown>).targetRank).toBeUndefined();
+  expect((cfg.farm as Record<string, unknown>).preset).toBeUndefined();
+  // The sibling key survives, as every other per-field fallback in this file does.
+  expect((cfg.farm as Record<string, unknown>).maxPerRun).toBe(1);
+  // The message has to name the value and what was allowed. "is a string, not the expected
+  // type" would send the owner looking for the wrong mistake entirely.
+  const rank = cfg.configIssues.find((m) => m.includes('farm.targetRank'));
+  expect(rank).toContain('"Heb Fanatik"');
+  expect(rank).toContain('"Heb Lover"');
+  expect(cfg.configIssues.find((m) => m.includes('farm.preset'))).toContain('"ratio-fist"');
+});
+
+test('per-dimension weights survive when valid and fall back whole when not', async () => {
+  writeConfig({ farm: { weights: { ratio: 0.5, volume: 2 } } });
+  const { loadConfig } = await import('../src/config');
+  expect((loadConfig().farm as Record<string, unknown>).weights).toEqual({ ratio: 0.5, volume: 2 });
+
+  vi.resetModules();
+  writeConfig({ farm: { weights: { ratio: 'lots' }, maxPerRun: 1 } });
+  const { loadConfig: reload } = await import('../src/config');
+  const cfg = reload();
+  // One bad weight drops the whole object back to the preset it meant to modify: a partially
+  // applied weighting is not a weighting anyone chose.
+  expect((cfg.farm as Record<string, unknown>).weights).toBeUndefined();
+  expect((cfg.farm as Record<string, unknown>).maxPerRun).toBe(1);
+  expect(cfg.configIssues.some((m) => m.includes('farm.weights'))).toBe(true);
+});

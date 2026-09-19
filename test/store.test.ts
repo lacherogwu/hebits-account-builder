@@ -274,3 +274,18 @@ test('the last rank seen is persisted, and rewritten only when it changes', () =
   store.noteRank('');
   expect(store.data.lastRank).toBe('Heb User');
 });
+
+test('a state.json written before this version loads, keeping the keys it does have', () => {
+  // The live host's state.json predates lastRank and completedAt. Both are optional and the
+  // constructor requires only grabs and torrents, so an older file must still load whole -
+  // an empty store means nothing is releasable and the day's grab count starts over.
+  const dir = mkdtempSync(join(tmpdir(), 'store-'));
+  writeFileSync(
+    join(dir, 'state.json'),
+    JSON.stringify({ grabs: [{ id: '7', at: '2026-09-18T00:00:00.000Z' }], torrents: { '7': { hash: 'aaa' } } }),
+  );
+  const store = new Store(dir, 'UTC');
+  expect(store.loadIssue).toBeNull();
+  expect(store.data.torrents['7']?.hash).toBe('aaa');
+  expect(store.data.lastRank).toBeUndefined();
+});

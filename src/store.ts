@@ -18,6 +18,11 @@ export interface TorrentEntry {
   // Written by the cleanup job (lib/jobs.js) when qBittorrent releases a managed torrent;
   // the entry stays in the index (for history/dedup) but is marked gone.
   removedAt?: string;
+  // Stamped the first time this torrent is seen at 100% in qBittorrent, and never cleared.
+  // The rank ladder counts torrents downloaded IN FULL, a figure the tracker never lowers,
+  // so the local count must not fall either when the cleanup pass releases the files. See
+  // countCompleted() in farm.ts for why that count is only ever a lower bound.
+  completedAt?: string;
 }
 
 export interface StoreData {

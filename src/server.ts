@@ -10,6 +10,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { CONFIG_DIR, loadConfig, readCookie, writeCookie } from './config';
 import type { CookiePageReq, CookiePageRes } from './cookie-page';
 import { handleCookiePage } from './cookie-page';
+import { countCompleted, rankProgress, resolveWeights } from './farm';
 import { makeGrabber, UserError } from './grab';
 import { makeJobs } from './jobs';
 import { Notifier } from './notify';
@@ -192,16 +193,56 @@ app.get('/:token/status', async (c) => {
   // degrades on its own (stats() catches, daily() falls back to the local ledger), so this
   // one does too: null means "not known", which `|| 0` would have rendered as a full disk.
   const freeBytes = await qbit.freeSpace().catch(() => NaN);
+  // Same degrade-don't-500 rule as freeSpace above: the torrent list is one input to a lower
+  // bound, not something this page should die without.
+  const completed = countCompleted(store.data.torrents, await qbit.all().catch(() => undefined));
+  // Where the account stands on each farmable dimension of the rank it is aiming at. This is
+  // the answer to "why am I not ranking up?", which nothing on this page used to give: the
+  // old line reported Heb User's 20 GB and 1.25 at every rank and never mentioned the torrent
+  // count, the dimension an account can stall on indefinitely without a symptom.
+  const progress =
+    st &&
+    rankProgress({
+      uploaded: st.uploaded,
+      downloaded: st.downloaded,
+      currentRank: st.userClass,
+      targetRank: cfg.farm?.targetRank,
+      targetRatio: cfg.farm?.targetRatio,
+      completed,
+    });
+  const inForce = progress && resolveWeights(cfg.farm, progress);
   return json(c, 200, {
     version: VERSION,
-    account: st && {
-      class: st.userClass,
-      uploadedGB: +(st.uploaded / GB).toFixed(2),
-      downloadedGB: +(st.downloaded / GB).toFixed(2),
-      ratio: st.ratio,
-      requiredRatio: st.requiredRatio,
-      towardHebUser: `downloaded ${(st.downloaded / GB).toFixed(1)}/20 GB, ratio ${st.downloaded ? (st.uploaded / st.downloaded).toFixed(2) : '∞'}/1.25`,
-    },
+    account: st &&
+      progress &&
+      inForce && {
+        class: st.userClass,
+        uploadedGB: +(st.uploaded / GB).toFixed(2),
+        downloadedGB: +(st.downloaded / GB).toFixed(2),
+        ratio: st.ratio,
+        requiredRatio: st.requiredRatio,
+        target: {
+          rank: progress.targetRank,
+          // Present only when farm.targetRank named a rank this build does not know, so the
+          // page says which rank is actually being chased instead of quietly substituting one.
+          requested: progress.targetRankRequested,
+          binding: progress.binding,
+          preset: inForce.preset,
+          weights: inForce.weights,
+          summary: progress.summary,
+          ratio: progress.ratio,
+          volumeGB: progress.volumeGB,
+          // `atLeast`, not `count`: this is a lower bound on the tracker's own lifetime
+          // figure, which nothing here can read. See countCompleted() in farm.ts.
+          torrents: {
+            atLeast: progress.torrents.have,
+            need: progress.torrents.need,
+            known: progress.torrents.known,
+            basis: completed?.basis,
+          },
+          daysOnSite: progress.days,
+        },
+      },
     downloadsToday: `${d.used}/${d.limit}`,
     // storeIssue: a state.json that had to be moved aside resets the fallback download count
     // and empties the torrent index, so it belongs next to configIssues rather than only in

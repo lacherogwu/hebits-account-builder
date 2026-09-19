@@ -11,7 +11,7 @@
   "dailyLimit": 0,
   "minFreeGB": 20,
   "lowDiskAlertGB": 15,
-  "farm": { "enabled": true, "intervalMin": 10 },
+  "farm": { "enabled": true, "intervalMin": 10, "targetRank": "auto" },
   "cleanup": { "enabled": true, "intervalMin": 30 },
   "notify": { "webhookUrl": "" }
 }

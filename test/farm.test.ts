@@ -108,20 +108,26 @@ test('counted downloads only when cheap, needed, and ratio-safe', () => {
   const bigHalf = item({ downloadFactor: 0.5, size: 11 * GB });
   const full = item({ downloadFactor: 1, size: 5 * GB });
   const x2 = item({ downloadFactor: 1, uploadFactor: 2, size: 4 * GB });
-  // 5 GB uploaded: half-leech 8 GB counts 4 -> ratio 1.25 ok; 11 GB would drop below
-  // the Heb User ratio; full paid 5 GB is not "cheap"
-  const picks = pickGrabs([bigHalf, half, full], ctx());
+  // The preset is pinned because WHICH of half/bigHalf is taken first is now a preference
+  // decision (see the preset suite below), and this test is about the three acceptance rules
+  // - wanted, cheap, ratio-safe - which every preset applies identically.
+  //
+  // 5 GB uploaded: half-leech 8 GB counts 4, leaving 5/4; 11 GB would then count 5.5 more and
+  // put the projected ratio at 5/9.5 = 0.53, under requiredRatioFor(9.5 GB) + ratioMargin =
+  // 0.7; full paid 5 GB is not "cheap".
+  const ratioFirst = ctx({ opts: { preset: 'ratio-first' } });
+  const picks = pickGrabs([bigHalf, half, full], ratioFirst);
   expect(picks.map((p) => p.item.id)).toEqual([half.id]);
   expect(picks[0]?.reason).toMatch(/counts 4\.0 GB/);
   // x2 upload qualifies as cheap
-  expect(pickGrabs([x2], ctx()).map((p) => p.item.id)).toEqual([x2.id]);
+  expect(pickGrabs([x2], ratioFirst).map((p) => p.item.id)).toEqual([x2.id]);
   // not safe: little upload left relative to download
   const poor = { ...stats, uploaded: 3 * GB, downloaded: 4 * GB };
-  expect(pickGrabs([x2], ctx({ stats: poor })).length).toBe(0);
+  expect(pickGrabs([x2], ctx({ stats: poor, opts: { preset: 'ratio-first' } })).length).toBe(0);
   // target reached: no more counted downloads, freeleech still fine
   const done = { ...stats, uploaded: 40 * GB, downloaded: 25 * GB };
   const free = item();
-  expect(pickGrabs([x2, free], ctx({ stats: done })).map((p) => p.item.id)).toEqual([free.id]);
+  expect(pickGrabs([x2, free], ctx({ stats: done, opts: { preset: 'ratio-first' } })).map((p) => p.item.id)).toEqual([free.id]);
 });
 
 const t = (hash: string, over: Partial<QbitTorrent> = {}): QbitTorrent => ({
