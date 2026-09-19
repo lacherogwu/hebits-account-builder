@@ -10563,6 +10563,7 @@ const DEFAULTS = {
 	watchPath: join(HOME, "hebits", "watch"),
 	seedCategory: "seed-auto",
 	seedPath: join(HOME, "hebits", "seed"),
+	trackerHost: "hebits.net",
 	farm: {
 		enabled: true,
 		intervalMin: 10
@@ -10647,6 +10648,7 @@ const fieldSchemas = {
 	watchPath: string(),
 	seedCategory: string(),
 	seedPath: string(),
+	trackerHost: string(),
 	lowDiskAlertGB: number(),
 	torrentDir: string(),
 	logFile: string()
@@ -10908,6 +10910,29 @@ function seasonInfo(title) {
 	}
 	if (/\bcomplete\b/i.test(title)) return { kind: "complete" };
 	return null;
+}
+//#endregion
+//#region src/tags.ts
+const KEYS = {
+	hebits: "hebitsId",
+	imdb: "imdb"
+};
+function buildTags({ hebitsId, imdb } = {}) {
+	const tags = [];
+	if (hebitsId) tags.push(`hebits:${hebitsId}`);
+	if (imdb) tags.push(`imdb:${imdb}`);
+	return tags;
+}
+function parseTags(raw) {
+	const out = {};
+	for (const tag of String(raw ?? "").split(",")) {
+		const t = tag.trim();
+		const i = t.indexOf(":");
+		if (i < 1) continue;
+		const field = KEYS[t.slice(0, i)];
+		if (field) out[field] = t.slice(i + 1);
+	}
+	return out;
 }
 //#endregion
 //#region src/farm.ts
@@ -11330,6 +11355,73 @@ function stuckDownloads(torrents, { now, managed, hours = 24 }) {
 	const nowSec = now / 1e3;
 	return torrents.filter((t) => managed.has(t.hash) && t.progress < 1 && nowSec - (t.added_on || nowSec) >= hours * 3600);
 }
+const HEBITS_TRACKER_HOST = "hebits.net";
+const HEBITS_ID = /^\d+$/;
+function isHebitsTracker(urls, host = HEBITS_TRACKER_HOST) {
+	const want = (host ?? "").trim().toLowerCase().replace(/^\.+/, "") || "hebits.net";
+	return urls.some((raw) => {
+		let hostname;
+		try {
+			hostname = new URL(String(raw)).hostname.toLowerCase();
+		} catch {
+			return false;
+		}
+		return hostname === want || hostname.endsWith(`.${want}`);
+	});
+}
+function adoptionCandidates(torrents, entries) {
+	const recorded = new Set(Object.values(entries).map((e) => e?.hash).filter((h) => Boolean(h)).map((h) => h.toLowerCase()));
+	const survey = {
+		candidates: [],
+		known: 0,
+		skipped: []
+	};
+	for (const t of torrents) {
+		const { hebitsId } = parseTags(t.tags);
+		if (hebitsId === void 0) continue;
+		if (recorded.has(String(t.hash).toLowerCase())) {
+			survey.known++;
+			continue;
+		}
+		if (!HEBITS_ID.test(hebitsId)) {
+			survey.skipped.push({
+				hebitsId,
+				hash: t.hash,
+				reason: "its hebits tag is not a numeric torrent id"
+			});
+			continue;
+		}
+		const claimed = entries[hebitsId];
+		if (claimed?.hash) {
+			survey.skipped.push({
+				hebitsId,
+				hash: t.hash,
+				reason: `hebits:${hebitsId} is already on record with a different infohash (${claimed.hash.slice(0, 8)})`
+			});
+			continue;
+		}
+		survey.candidates.push({
+			hebitsId,
+			torrent: t
+		});
+	}
+	return survey;
+}
+function adoptedEntry(t, now, existing) {
+	const entry = {
+		hash: t.hash,
+		name: t.name,
+		size: t.size
+	};
+	const { imdb } = parseTags(t.tags);
+	if (imdb) entry.imdb = imdb;
+	if (existing?.completedAt) entry.completedAt = existing.completedAt;
+	else if (t.progress >= 1) {
+		const ms = (t.completion_on ?? 0) * 1e3;
+		entry.completedAt = new Date(ms > 0 && ms <= now.getTime() ? ms : now.getTime()).toISOString();
+	}
+	return entry;
+}
 function describe(it) {
 	const info = seasonInfo(it.name);
 	return `${it.name} (${(it.size / GB$3).toFixed(1)} GB${info ? `, ${info.kind}` : ""})`;
@@ -11447,14 +11539,6 @@ function readTorrent(buf) {
 		private: info.private === 1,
 		files
 	};
-}
-//#endregion
-//#region src/tags.ts
-function buildTags({ hebitsId, imdb } = {}) {
-	const tags = [];
-	if (hebitsId) tags.push(`hebits:${hebitsId}`);
-	if (imdb) tags.push(`imdb:${imdb}`);
-	return tags;
 }
 //#endregion
 //#region src/grab.ts
@@ -11658,13 +11742,78 @@ function makeJobs({ cfg, store, hebits, qbit, notifier, ensureTorrent, farmLog, 
 			farmBusy = false;
 		}
 	}
+	const MAX_PER_PASS = 50;
+	const adoption = {
+		checkedAt: null,
+		adopted: 0,
+		lastAdopted: [],
+		skipped: [],
+		error: null
+	};
+	let adoptBusy = false;
+	async function adoptTick(torrents) {
+		if (adoptBusy) return;
+		adoptBusy = true;
+		try {
+			const all = torrents ?? await qbit.all();
+			const survey = adoptionCandidates(all, store.data.torrents);
+			const host = cfg.trackerHost?.trim() || "hebits.net";
+			const skipped = [...survey.skipped];
+			const lastAdopted = [];
+			let wrongTracker = 0;
+			for (const { hebitsId, torrent } of survey.candidates.slice(0, MAX_PER_PASS)) {
+				let urls;
+				try {
+					urls = (await qbit.trackers(torrent.hash)).map((t) => t.url);
+				} catch (e) {
+					skipped.push({
+						hebitsId,
+						hash: torrent.hash,
+						reason: `its tracker list could not be read (${e.message})`
+					});
+					continue;
+				}
+				if (!isHebitsTracker(urls, host)) {
+					wrongTracker++;
+					skipped.push({
+						hebitsId,
+						hash: torrent.hash,
+						reason: `it does not announce to ${host}`
+					});
+					continue;
+				}
+				store.putTorrent(hebitsId, adoptedEntry(torrent, /* @__PURE__ */ new Date(), store.data.torrents[hebitsId]));
+				lastAdopted.push({
+					hebitsId,
+					name: torrent.name
+				});
+				farmLog("adopt", `${torrent.name} (hebits ${hebitsId}) was already in qBittorrent - now managed, so it can be released when the disk fills`);
+			}
+			Object.assign(adoption, {
+				checkedAt: (/* @__PURE__ */ new Date()).toISOString(),
+				adopted: adoption.adopted + lastAdopted.length,
+				lastAdopted,
+				skipped,
+				error: null
+			});
+			if (lastAdopted.length || skipped.length) log(`adopt: ${lastAdopted.length} adopted, ${skipped.length} left alone, ${survey.known} already managed of ${all.length} in qBittorrent`);
+			if (wrongTracker) alertProblem("adopt-tracker", "Hebits builder: tagged torrents left unmanaged", `${wrongTracker} torrent(s) in qBittorrent carry a hebits tag but do not announce to ${host}, so they can never be released. Check "trackerHost" in config.json.`);
+		} catch (e) {
+			adoption.error = e.message;
+			adoption.checkedAt = (/* @__PURE__ */ new Date()).toISOString();
+			log(`adopt: ${adoption.error}`);
+		} finally {
+			adoptBusy = false;
+		}
+	}
 	let cleanupBusy = false;
 	async function cleanupTick() {
 		if (cleanupBusy || !cfg.cleanup?.enabled) return;
 		cleanupBusy = true;
 		try {
-			const managed = new Set(Object.values(store.data.torrents).map((t) => t.hash).filter((h) => Boolean(h)));
 			const all = await qbit.all();
+			await adoptTick(all);
+			const managed = new Set(Object.values(store.data.torrents).map((t) => t.hash).filter((h) => Boolean(h)));
 			const freeBytes = await qbit.freeSpace();
 			if (!Number.isFinite(freeBytes)) throw new Error("qBittorrent returned a non-numeric free space value");
 			const completedAt = (/* @__PURE__ */ new Date()).toISOString();
@@ -11716,7 +11865,9 @@ function makeJobs({ cfg, store, hebits, qbit, notifier, ensureTorrent, farmLog, 
 	return {
 		farmTick,
 		cleanupTick,
+		adoptTick,
 		health,
+		adoption,
 		noteLogin
 	};
 }
@@ -11892,6 +12043,9 @@ var QBit = class {
 	all() {
 		return this.call("torrents/info");
 	}
+	trackers(hash) {
+		return this.call("torrents/trackers", { params: { hash } });
+	}
 	remove(hash) {
 		return this.call("torrents/delete", { form: {
 			hashes: hash,
@@ -12039,7 +12193,7 @@ function farmLog(action, text) {
 	store.save();
 	log(`${action}: ${text}`);
 }
-const { farmTick, cleanupTick, health, noteLogin } = makeJobs({
+const { farmTick, cleanupTick, adoptTick, health, adoption, noteLogin } = makeJobs({
 	cfg,
 	store,
 	hebits,
@@ -12181,7 +12335,8 @@ app.get("/:token/status", async (c) => {
 			...health,
 			logFile: LOG_FILE,
 			configIssues: cfg.configIssues,
-			storeIssue: store.loadIssue
+			storeIssue: store.loadIssue,
+			adoption
 		},
 		recentActivity: (store.data.farmLog || []).slice(-20).reverse(),
 		freeGB: Number.isFinite(freeBytes) ? Math.round(freeBytes / GB) : null,
@@ -12208,6 +12363,8 @@ function rotateLog() {
 }
 rotateLog();
 setInterval(rotateLog, 36e5);
+setTimeout(adoptTick, 45e3);
+setInterval(adoptTick, 18e5);
 setTimeout(farmTick, 6e4);
 setInterval(farmTick, (cfg.farm?.intervalMin ?? 10) * 6e4);
 setTimeout(cleanupTick, 9e4);
