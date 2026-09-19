@@ -13,6 +13,12 @@ const HOME = homedir();
 export const CONFIG_DIR = process.env.HEBITS_BUILDER_DIR || join(HOME, '.config', 'hebits-account-builder');
 const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
 
+/** p-throttle's shape: at most `limit` requests per `interval` milliseconds. */
+export interface RateLimit {
+  limit: number;
+  interval: number;
+}
+
 export interface Config {
   port: number;
   // LAN address to put in links (e.g. the cookie-update alert). Empty auto-detects it.
@@ -52,6 +58,11 @@ export interface Config {
   // existing behaviour and changes none of it.
   notify: NotifyConfig & { webhookUrl: string };
   lowDiskAlertGB: number;
+  // How hard this service may hit the tracker, shared across every call hebits-client makes.
+  // Explicit rather than inherited: it was left at the client's default before, which meant
+  // the one setting that can cost the account was invisible in config and unchangeable
+  // without a rebuild.
+  rateLimit: RateLimit;
   torrentDir: string;
   // The file holding the Hebits session cookie. Configurable like every other path here, so
   // it can be pointed at a file another service also reads - one paste then serves both.
@@ -82,6 +93,12 @@ const DEFAULTS: Omit<Config, 'token' | 'configIssues'> = {
   cleanup: { enabled: true, intervalMin: 30 },
   notify: { webhookUrl: '' },
   lowDiskAlertGB: 15,
+  // One request per two seconds - hebits-client's own default, restated here so it is
+  // visible and adjustable. It is the right default for this service: nothing here has a
+  // person waiting on it. A farm tick costs at most seven tracker requests, so roughly 14 s
+  // of a 600 s interval. Raising it buys nothing and spends the one thing that cannot be
+  // replaced.
+  rateLimit: { limit: 1, interval: 2000 },
   torrentDir: join(CONFIG_DIR, 'torrents'),
   // Defaults inside the config directory, so the service is self-contained unless the
   // operator deliberately points it somewhere shared.
@@ -169,6 +186,18 @@ const cleanupOptionsShape: Record<string, z.ZodType> = {
 // false. The result is a config typo silently disabling the only channel that would have
 // told the owner the tracker is unhappy or the disk is full. Validating here turns that
 // into a startup log line and a configIssues entry on /status.
+// Both must be positive and finite or p-throttle's behaviour is undefined: limit 0 stalls
+// every request forever, and a negative or NaN interval makes the throttle meaningless.
+const rateLimitShape: Record<string, z.ZodType> = {
+  limit: z.number().int().positive(),
+  interval: z.number().positive(),
+};
+
+// Above this, a configIssue is recorded and the value is still honoured: a warning, not a
+// cap. The account is the operator's, and a deliberate choice is not a typo - but nothing
+// here has a person waiting on it, so there is no reason to go faster.
+const NOISY_RATE_PER_SECOND = 5;
+
 const notifyShape: Record<string, z.ZodType> = {
   webhookUrl: z.string(),
   method: z.string(),
@@ -474,8 +503,21 @@ export function loadConfig(): Config {
       ...DEFAULTS.notify,
       ...validateOptions('notify', notifyShape, DEFAULTS.notify, saved.notify, configIssues),
     };
+  if ('rateLimit' in saved)
+    validated.rateLimit = {
+      ...DEFAULTS.rateLimit,
+      ...validateOptions('rateLimit', rateLimitShape, DEFAULTS.rateLimit, saved.rateLimit, configIssues),
+    };
 
   const cfg: Config = { ...DEFAULTS, ...validated, token, configIssues } as Config;
+  // A property of the two keys together, so it is checked after the merge rather than inside
+  // rateLimitShape: either key alone can be perfectly reasonable.
+  const perSecond = (cfg.rateLimit.limit / cfg.rateLimit.interval) * 1000;
+  if (perSecond > NOISY_RATE_PER_SECOND)
+    logIssue(
+      `"rateLimit" allows ${perSecond.toFixed(1)} requests per second, above the ${NOISY_RATE_PER_SECOND}/s this service considers useful - honoured, but nothing here waits on a response`,
+      configIssues,
+    );
   // A bad custom torrentDir (unwritable parent, a path through a file, ...) must not throw
   // here either, for the same reason as the JSON.parse above - fall back to the default,
   // which lives inside CONFIG_DIR and is normally creatable since that mkdirSync already

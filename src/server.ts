@@ -40,16 +40,11 @@ const store = new Store(CONFIG_DIR, cfg.timezone, (m) => log(m));
 // counted download could be taken that a fresh read would have skipped. /status already
 // reaches the tracker on every load anyway, since dailyDownloads() never caches.
 //
-// rateLimit: left at hebits-client's default of one request per 2s, deliberately. Its own
-// comment there says "nothing here is latency-sensitive", which is a claim about a consumer -
-// and this service is that consumer. An interactive consumer - one where a person is waiting
-// on a response - would have to raise it; nothing waits on anything here. A farm tick costs at most seven
-// tracker requests (stats, dailyDownloads, browse, then dailyDownloads + downloadTorrent per
-// grab, capped at maxPerRun = 2), so roughly 14s of a 600s interval, and farmBusy stops ticks
-// overlapping; the cleanup tick talks only to qBittorrent. The most a human ever waits is
-// /status, at two requests. Raising this would buy nothing and spend it on the one thing that
-// cannot be replaced - the account, on a private tracker.
-const hebits = new Hebits({ cookie: () => readCookie(cfg.cookiePath) ?? '', cacheTtlMs: 0 });
+// rateLimit comes from config (see DEFAULTS.rateLimit for why one request per 2s is right
+// here). It used to be omitted entirely, which inherited the same value from hebits-client -
+// correct, but invisible in config.json and unchangeable without a rebuild, which is the
+// wrong shape for the one setting that can cost the account.
+const hebits = new Hebits({ cookie: () => readCookie(cfg.cookiePath) ?? '', cacheTtlMs: 0, rateLimit: cfg.rateLimit });
 const qbit = new QBit(cfg);
 store.data.notified ??= {};
 const notifier = new Notifier(

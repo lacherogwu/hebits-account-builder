@@ -10573,6 +10573,10 @@ const DEFAULTS = {
 	},
 	notify: { webhookUrl: "" },
 	lowDiskAlertGB: 15,
+	rateLimit: {
+		limit: 1,
+		interval: 2e3
+	},
 	torrentDir: join(CONFIG_DIR, "torrents"),
 	cookiePath: join(CONFIG_DIR, "cookie.txt"),
 	logFile: join(CONFIG_DIR, "builder.log")
@@ -10627,6 +10631,11 @@ const cleanupOptionsShape = {
 	minWatchAgeDays: number(),
 	watchCategory: string()
 };
+const rateLimitShape = {
+	limit: number().int().positive(),
+	interval: number().positive()
+};
+const NOISY_RATE_PER_SECOND = 5;
 const notifyShape = {
 	webhookUrl: string(),
 	method: string(),
@@ -10772,12 +10781,18 @@ function loadConfig() {
 		...DEFAULTS.notify,
 		...validateOptions("notify", notifyShape, DEFAULTS.notify, saved.notify, configIssues)
 	};
+	if ("rateLimit" in saved) validated.rateLimit = {
+		...DEFAULTS.rateLimit,
+		...validateOptions("rateLimit", rateLimitShape, DEFAULTS.rateLimit, saved.rateLimit, configIssues)
+	};
 	const cfg = {
 		...DEFAULTS,
 		...validated,
 		token,
 		configIssues
 	};
+	const perSecond = cfg.rateLimit.limit / cfg.rateLimit.interval * 1e3;
+	if (perSecond > NOISY_RATE_PER_SECOND) logIssue(`"rateLimit" allows ${perSecond.toFixed(1)} requests per second, above the ${NOISY_RATE_PER_SECOND}/s this service considers useful - honoured, but nothing here waits on a response`, configIssues);
 	try {
 		mkdirSync(cfg.torrentDir, {
 			recursive: true,
@@ -12170,7 +12185,8 @@ const cfg = loadConfig();
 const store = new Store(CONFIG_DIR, cfg.timezone, (m) => log(m));
 const hebits = new Hebits({
 	cookie: () => readCookie(cfg.cookiePath) ?? "",
-	cacheTtlMs: 0
+	cacheTtlMs: 0,
+	rateLimit: cfg.rateLimit
 });
 const qbit = new QBit(cfg);
 store.data.notified ??= {};

@@ -567,3 +567,53 @@ test('a custom trackerHost is honoured', async () => {
   const { loadConfig } = await import('../src/config');
   expect(loadConfig().trackerHost).toBe('tracker.example.test');
 });
+
+// --- rateLimit -----------------------------------------------------------------------------
+// This service used to omit rateLimit entirely and inherit hebits-client's default. That was
+// the right value and the wrong shape: the one setting that can cost the account was absent
+// from config.json and unchangeable without a rebuild. It is now explicit here, which also
+// means the loader has to defend it, because config.json is hand-edited.
+
+test('the shipped rateLimit default is one request per two seconds', async () => {
+  const { loadConfig } = await import('../src/config');
+  expect(loadConfig().rateLimit).toEqual({ limit: 1, interval: 2000 });
+});
+
+test('a custom rateLimit is honoured', async () => {
+  writeConfig({ rateLimit: { limit: 1, interval: 10_000 } });
+  const { loadConfig } = await import('../src/config');
+  const cfg = loadConfig();
+  expect(cfg.rateLimit).toEqual({ limit: 1, interval: 10_000 });
+  expect(cfg.configIssues).toEqual([]);
+});
+
+test('one bad rateLimit key falls back alone, and the sibling key survives', async () => {
+  writeConfig({ rateLimit: { limit: null, interval: 4000 } });
+  const { loadConfig } = await import('../src/config');
+  const cfg = loadConfig();
+  expect(cfg.rateLimit).toEqual({ limit: 1, interval: 4000 });
+  expect(cfg.configIssues.some((m) => m.includes('rateLimit.limit'))).toBe(true);
+});
+
+// Both are type-valid numbers, so zod alone would have let them through: limit 0 never
+// releases a request, and a negative interval makes the throttle meaningless.
+test('a zero or negative rateLimit falls back instead of stalling or unthrottling', async () => {
+  writeConfig({ rateLimit: { limit: 0, interval: -1 } });
+  const { loadConfig } = await import('../src/config');
+  const cfg = loadConfig();
+  expect(cfg.rateLimit).toEqual({ limit: 1, interval: 2000 });
+  expect(cfg.configIssues.length).toBe(2);
+});
+
+test('an aggressive rateLimit is honoured, and says so in configIssues', async () => {
+  writeConfig({ rateLimit: { limit: 20, interval: 1000 } });
+  const { loadConfig } = await import('../src/config');
+  const cfg = loadConfig();
+  expect(cfg.rateLimit).toEqual({ limit: 20, interval: 1000 }); // honoured, not clamped
+  expect(cfg.configIssues.some((m) => m.includes('20.0 requests per second'))).toBe(true);
+});
+
+test('the default rate does not warn', async () => {
+  const { loadConfig } = await import('../src/config');
+  expect(loadConfig().configIssues).toEqual([]);
+});

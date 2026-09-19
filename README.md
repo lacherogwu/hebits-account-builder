@@ -58,6 +58,7 @@ environment variable. See `config.example.json` for a starting point.
 | `farm` | `{"enabled": true, "intervalMin": 10}` | Auto-grab job; see `GRAB_DEFAULTS` in `src/farm.ts` for tuning knobs (`keepForUser`, `reserveGB`, `maxSizeGB`, …) and [Rank targets and presets](#rank-targets-and-presets) for `targetRank`, `preset` and `weights` |
 | `cleanup` | `{"enabled": true, "intervalMin": 30}` | Auto-release job; see `CLEANUP_DEFAULTS` in `src/farm.ts` (`reserveGB`, `minSeedDays`, `keepIfSeedersBelow`, …) |
 | `notify` | `{"webhookUrl": ""}` | Alert transport; see [Notifications](#notifications) |
+| `rateLimit` | `{"limit": 1, "interval": 2000}` | At most `limit` requests per `interval` ms, shared across every tracker call — `browse`, the profile counter, `.torrent` downloads and every retry. The default is one per two seconds, which is right here: nothing in this service has a person waiting on it. Past 5/s a note is recorded in `configIssues`, but the value is honoured |
 | `lowDiskAlertGB` | `15` | Alert threshold after a release pass still leaves the disk full |
 | `torrentDir` | `<config dir>/torrents` | Where downloaded `.torrent` files are cached |
 | `cookiePath` | `<config dir>/cookie.txt` | File holding the Hebits session cookie; written by the `/cookie` page |
